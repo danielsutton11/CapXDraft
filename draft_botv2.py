@@ -14,8 +14,8 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
 # ---------- Config ----------
-CAPTAIN_ROLE_ID = 1421875946641686588  # Replace with your Captain role ID
-ELIGIBLE_ROLE_ID = 1421135184236904539  # Replace with your Participants role ID
+CAPTAIN_ROLE_ID = 1422656496088514632  # Replace with your Captain role ID
+ELIGIBLE_ROLE_ID = 989342758399512606  # Replace with your Participants role ID
 STATE_FILE = "draft_state.json"
 
 # ---------- Bot setup ----------
