@@ -143,7 +143,7 @@ public class PanelController {
     public void open(InteractionHook hook, Guild g, Member m, String factionOption, long channelId) {
         try {
             Faction f = drafts.resolveViewFaction(m, factionOption, channelId);
-            show(hook, home(g, m, f, null));
+            show(hook, openingScreen(g, m, f));
             hook.deleteOriginal().queueAfter(PANEL_MINUTES, TimeUnit.MINUTES, null, err -> {});
         } catch (UserError e) {
             hook.editOriginal("❌ " + e.getMessage()).queue(ok -> hook.deleteOriginal()
@@ -348,17 +348,27 @@ public class PanelController {
     // Home screens
     // =====================================================================
 
-    /** The right home screen for this member: leader control panel, captain panel, or status. */
-    View home(Guild g, Member m, Faction f, String notice) {
-        DraftManager.Snapshot snap = drafts.snapshot(f.getKey());
-        boolean captain = snap != null && snap.captains().contains(m.getIdLong());
-        if (drafts.isLeader(m, f)) {
-            // A leader who's also a captain gets their own panel while it's their pick.
-            if (captain && drafts.captainView(f, m.getIdLong()).onClock()) return captainHome(g, m, f, notice);
-            return leaderHome(g, m, f, notice);
+    /**
+     * What /draft opens on. Same as {@link #home}, except a leader who's also a captain lands on
+     * their captain panel while it's their pick (it has a 🎛️ Control Panel button back).
+     */
+    private View openingScreen(Guild g, Member m, Faction f) {
+        if (drafts.isLeader(m, f) && isCaptain(m, f) && drafts.captainView(f, m.getIdLong()).onClock()) {
+            return captainHome(g, m, f, null);
         }
-        if (captain) return captainHome(g, m, f, notice);
+        return home(g, m, f, null);
+    }
+
+    /** The right home screen for this member: leaders always get the control panel, then captains, then status. */
+    View home(Guild g, Member m, Faction f, String notice) {
+        if (drafts.isLeader(m, f)) return leaderHome(g, m, f, notice);
+        if (isCaptain(m, f)) return captainHome(g, m, f, notice);
         return viewerHome(g, f, notice);
+    }
+
+    private boolean isCaptain(Member m, Faction f) {
+        DraftManager.Snapshot snap = drafts.snapshot(f.getKey());
+        return snap != null && snap.captains().contains(m.getIdLong());
     }
 
     private View leaderHome(Guild g, Member m, Faction f, String notice) {
@@ -445,7 +455,9 @@ public class PanelController {
         ui.text(clockLine(p) + "\n-# " + p.picksMade() + " picks made · "
                 + (p.timerSeconds() > 0 ? p.timerSeconds() / 60 + " min timer" : "no timer")
                 + " · auto-pick " + (p.autopick() ? "on" : "off"));
-        ui.buttons(paused ? Button.success(id("resume", f), "▶️ Resume") : Button.primary(id("pause", f), "⏸️ Pause"),
+        boolean myPick = !paused && p.onClock() != null && p.onClock() == m.getIdLong();
+        ui.buttons(myPick ? Button.success(id("pk", f), "🎯 Pick Player") : null,
+                paused ? Button.success(id("resume", f), "▶️ Resume") : Button.primary(id("pause", f), "⏸️ Pause"),
                 p.picksMade() > 0 ? Button.secondary(id("undo", f), "↩️ Undo") : null,
                 p.poolSize() > 0 ? Button.secondary(id("apick", f), "🛡️ Admin Pick") : null);
 
