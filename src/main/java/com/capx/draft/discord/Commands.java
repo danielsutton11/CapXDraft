@@ -48,12 +48,19 @@ public final class Commands {
                 .addOption(OptionType.USER, "new", "New captain", true)
                 .addOptions(faction(props)));
 
-        list.add(slash("addplayer", "Add a late joiner to the draft pool (leadership)")
-                .addOption(OptionType.USER, "member", "Member to add", true)
+        list.add(slash("buildpool", "Prepare the draft pool: draft role + Torn faction members (leadership)")
                 .addOptions(faction(props)));
 
-        list.add(slash("removeplayer", "Remove a player from the pool or their team (leadership)")
-                .addOptions(player("Player to remove"), faction(props)));
+        list.add(slash("addplayer", "Add someone to the pool, before or during the draft (leadership)")
+                .addOption(OptionType.USER, "member", "Discord member to add")
+                .addOption(OptionType.INTEGER, "torn_id", "Torn ID — for faction members who aren't on Discord")
+                .addOptions(faction(props)));
+
+        SlashCommandData remove = slash("removeplayer", "Remove up to 5 players from the pool or their team (leadership)");
+        for (int i = 1; i <= 5; i++) {
+            remove.addOptions(new OptionData(OptionType.STRING, "player" + i, "Player to remove", i == 1, true));
+        }
+        list.add(remove.addOptions(faction(props)));
 
         // ---------- captains ----------
         list.add(slash("pick", "Make your draft pick").addOptions(player("Start typing a name")));

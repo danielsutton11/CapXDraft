@@ -14,6 +14,7 @@ public class BotProperties {
     private long captainRoleId;
     private long teamCategoryId;
     private int maxQueue = 5;
+    private String eventName = "";
     private List<Long> teamChannelRoleIds = new ArrayList<>();
     private List<Faction> factions = new ArrayList<>();
 
@@ -31,6 +32,7 @@ public class BotProperties {
         private long draftRoleId;
         private long leadershipRoleId;
         private long channelId;
+        private long tornFactionId;
 
         public String getKey() { return key; }
         public void setKey(String key) { this.key = key; }
@@ -42,6 +44,8 @@ public class BotProperties {
         public void setLeadershipRoleId(long leadershipRoleId) { this.leadershipRoleId = leadershipRoleId; }
         public long getChannelId() { return channelId; }
         public void setChannelId(long channelId) { this.channelId = channelId; }
+        public long getTornFactionId() { return tornFactionId; }
+        public void setTornFactionId(long tornFactionId) { this.tornFactionId = tornFactionId; }
     }
 
     public String getToken() { return token; }
@@ -52,6 +56,8 @@ public class BotProperties {
     public void setCaptainRoleId(long captainRoleId) { this.captainRoleId = captainRoleId; }
     public long getTeamCategoryId() { return teamCategoryId; }
     public void setTeamCategoryId(long teamCategoryId) { this.teamCategoryId = teamCategoryId; }
+    public String getEventName() { return eventName; }
+    public void setEventName(String eventName) { this.eventName = eventName; }
     public int getMaxQueue() { return maxQueue; }
     public void setMaxQueue(int maxQueue) { this.maxQueue = maxQueue; }
     public List<Long> getTeamChannelRoleIds() { return teamChannelRoleIds; }

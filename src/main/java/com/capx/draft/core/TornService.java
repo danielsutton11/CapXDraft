@@ -79,6 +79,60 @@ public class TornService {
         });
     }
 
+    /**
+     * Current members of a Torn faction, as Torn ID → name. Blocking.
+     * @throws UserError if the key is missing or Torn returns an error
+     */
+    public Map<Long, String> fetchFactionMembers(long factionId) {
+        JsonNode root = call("https://api.torn.com/faction/" + factionId + "?selections=basic");
+        Map<Long, String> out = new java.util.LinkedHashMap<>();
+        root.path("members").fields().forEachRemaining(e -> {
+            try {
+                out.put(Long.parseLong(e.getKey()), e.getValue().path("name").asText("Unknown"));
+            } catch (NumberFormatException ignored) {
+                // not a member entry
+            }
+        });
+        if (out.isEmpty()) throw new UserError("Torn returned no members for faction " + factionId + ".");
+        return out;
+    }
+
+    /** A player's current Torn name. Blocking. */
+    public String fetchName(long tornId) {
+        JsonNode root = call("https://api.torn.com/user/" + tornId + "?selections=basic");
+        String name = root.path("name").asText("");
+        if (name.isBlank()) throw new UserError("Torn didn't return a name for " + tornId + ".");
+        return name;
+    }
+
+    private JsonNode call(String baseUrl) {
+        if (!enabled()) throw new UserError("No Torn API key is set (TORN_API_KEY), so I can't look up Torn data.");
+        String url = baseUrl + "&comment=DraftBot&key=" + props.getTornApiKey();
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                HttpResponse<String> res = http.send(
+                        HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(15)).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                JsonNode root = mapper.readTree(res.body());
+                if (root.has("error")) {
+                    int code = root.path("error").path("code").asInt();
+                    if (code == 5) { // too many requests
+                        sleep(10_000);
+                        continue;
+                    }
+                    throw new UserError("Torn API error: " + root.path("error").path("error").asText());
+                }
+                return root;
+            } catch (UserError e) {
+                throw e;
+            } catch (Exception ex) {
+                log.warn("Torn API call failed: {}", ex.getMessage());
+                sleep(2_000);
+            }
+        }
+        throw new UserError("Couldn't reach the Torn API — try again in a minute.");
+    }
+
     private Integer fetchStreak(long tornId) {
         String url = "https://api.torn.com/user/" + tornId
                 + "?selections=personalstats&comment=DraftBot&key=" + props.getTornApiKey();

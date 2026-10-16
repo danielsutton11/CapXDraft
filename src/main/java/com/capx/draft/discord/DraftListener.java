@@ -123,8 +123,18 @@ public class DraftListener extends ListenerAdapter {
             case "undo" -> drafts.undo(g, m, faction, ch);
             case "adminpick" -> drafts.adminPick(g, m, faction, ch, str(e, "player"));
             case "replacecaptain" -> drafts.replaceCaptain(g, m, faction, ch, member(e, "old"), member(e, "new"));
-            case "addplayer" -> drafts.addPlayer(g, m, faction, ch, member(e, "member"));
-            case "removeplayer" -> drafts.removePlayer(g, m, faction, ch, str(e, "player"));
+            case "buildpool" -> drafts.buildPool(g, m, faction, ch);
+            case "addplayer" -> drafts.addPlayer(g, m, faction, ch,
+                    e.getOption("member") == null ? null : member(e, "member"),
+                    e.getOption("torn_id") == null ? null : e.getOption("torn_id").getAsLong());
+            case "removeplayer" -> {
+                List<String> picks = new ArrayList<>();
+                for (int i = 1; i <= 5; i++) {
+                    String v = str(e, "player" + i);
+                    if (v != null && !v.isBlank()) picks.add(v);
+                }
+                yield drafts.removePlayers(g, m, faction, ch, picks);
+            }
             case "enddraft" -> {
                 var f = drafts.checkEndDraft(m, faction, ch);
                 yield new Confirm("End the **" + f.getName() + "** draft now? This can't be undone.",
@@ -226,7 +236,7 @@ public class DraftListener extends ListenerAdapter {
 
     @Override
     public void onCommandAutoCompleteInteraction(CommandAutoCompleteInteractionEvent e) {
-        if (!e.getFocusedOption().getName().equals("player") || e.getMember() == null) {
+        if (!e.getFocusedOption().getName().startsWith("player") || e.getMember() == null) {
             e.replyChoices(List.of()).queue();
             return;
         }
@@ -256,7 +266,8 @@ public class DraftListener extends ListenerAdapter {
         for (Player p : players) {
             if (out.size() >= 25) return;
             if (!query.isEmpty() && !p.display.toLowerCase(Locale.ROOT).contains(query)) continue;
-            String label = p.display + (p.streak != null ? " · 🔥 " + p.streak + "d streak" : "") + suffix;
+            String label = p.display + (p.streak != null ? " · 🔥 " + p.streak + "d streak" : "")
+                    + (p.onDiscord() ? "" : " · not on Discord") + suffix;
             if (label.length() > 100) label = label.substring(0, 100);
             out.add(new Command.Choice(label, String.valueOf(p.id)));
         }

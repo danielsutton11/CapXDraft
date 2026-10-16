@@ -17,6 +17,12 @@ import java.util.stream.Collectors;
 @Component
 public class BoardRenderer {
 
+    private final BotProperties props;
+
+    public BoardRenderer(BotProperties props) {
+        this.props = props;
+    }
+
     static final int MAX_TOTAL = 5800; // Discord caps a message's embeds at 6000 characters
     private static final int[] COLORS = {
             0x3498DB, 0x2ECC71, 0xE67E22, 0x9B59B6, 0xE74C3C, 0xF1C40F, 0x1ABC9C, 0xAD1457, 0x95A5A6
@@ -43,6 +49,13 @@ public class BoardRenderer {
             }
         }
         return embeds;
+    }
+
+    /** e.g. "🏆 Capacity X Halloween Draft 2026" - the year is the current year in UK time. */
+    public String title(BotProperties.Faction faction) {
+        int year = java.time.LocalDate.now(java.time.ZoneId.of("Europe/London")).getYear();
+        String event = props.getEventName() == null || props.getEventName().isBlank() ? "" : props.getEventName().trim() + " ";
+        return "🏆 " + faction.getName() + " " + event + "Draft " + year;
     }
 
     /** 120 → "2 min", 90 → "1 min 30s", 45 → "45s". */
@@ -97,7 +110,7 @@ public class BoardRenderer {
                 + " · Auto-pick " + (d.autopick ? "on" : "off");
 
         return new EmbedBuilder()
-                .setTitle("🏆 " + faction.getName() + " Draft")
+                .setTitle(title(faction))
                 .setDescription(sb.toString())
                 .setFooter(footer)
                 .setColor(0x5865F2)
@@ -120,7 +133,8 @@ public class BoardRenderer {
                 sb.append("…and ").append(picks.size() - limit).append(" more\n");
                 break;
             }
-            String name = p.dropped ? "~~" + p.player.display + "~~" : p.player.display;
+            String name = (p.dropped ? "~~" + p.player.display + "~~" : p.player.display)
+                    + (p.player.onDiscord() || mode != 0 ? "" : " *(no Discord)*");
             if (mode == 0) {
                 sb.append('`').append(String.format("#%-3d", p.number)).append("` ").append(name).append('\n');
             } else {

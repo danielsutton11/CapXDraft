@@ -111,4 +111,22 @@ class DraftTest {
         d.status = DraftStatus.ACTIVE;
         assertEquals(Long.valueOf(2), d.currentCaptain());
     }
+
+    @Test
+    void tornOnlyPlayersAreDraftableAndExcludable() {
+        Player off = Player.tornOnly(2087183, "Hoezey");
+        assertEquals(-2087183L, off.id);
+        assertEquals("Hoezey [2087183]", off.display);
+        assertTrue(!off.onDiscord());
+
+        FactionState s = new FactionState("x");
+        s.excludedTornIds.add(2087183L);
+        assertTrue(s.isExcluded(off));
+        assertTrue(s.isExcluded(new Player(555L, "Hoezey [2087183]", 2087183L)), "excluded by Torn ID even once linked to Discord");
+
+        Draft d = draft(2, 1);
+        d.eligible.add(off);
+        d.recordPick(off, PickMethod.MANUAL);
+        assertTrue(d.isDrafted(off.id));
+    }
 }

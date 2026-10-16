@@ -214,6 +214,7 @@ public class TeamService {
     }
 
     public void addMember(Guild guild, Team team, long memberId) {
+        if (memberId <= 0) return; // Torn-only player - not on Discord
         Role role = team == null || team.roleId == null ? null : guild.getRoleById(team.roleId);
         if (role != null) {
             guild.addRoleToMember(UserSnowflake.fromId(memberId), role)
@@ -222,6 +223,7 @@ public class TeamService {
     }
 
     public void removeMember(Guild guild, Team team, long memberId) {
+        if (memberId <= 0) return;
         Role role = team == null || team.roleId == null ? null : guild.getRoleById(team.roleId);
         if (role != null) {
             guild.removeRoleFromMember(UserSnowflake.fromId(memberId), role)

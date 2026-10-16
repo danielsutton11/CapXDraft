@@ -2,8 +2,10 @@ package com.capx.draft.model;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Everything persisted for one faction: its captains, named teams and current/last draft. */
 public class FactionState {
@@ -11,6 +13,16 @@ public class FactionState {
     public List<Long> captains = new ArrayList<>();      // order set by /setcaptains
     public Map<Long, Team> teams = new HashMap<>();      // keyed by captain id
     public Draft draft;                                  // null until the first draft
+
+    /** Pool prepared before the draft (/buildpool), reviewed and trimmed by leadership. */
+    public List<Player> pool;
+    /** Players leadership removed before the draft; a rebuild won't add them back. */
+    public Set<Long> excludedIds = new HashSet<>();      // Player.id values
+    public Set<Long> excludedTornIds = new HashSet<>();
+
+    public boolean isExcluded(Player p) {
+        return excludedIds.contains(p.id) || (p.tornId != null && excludedTornIds.contains(p.tornId));
+    }
 
     public FactionState() {}
 

@@ -27,6 +27,8 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -221,13 +223,22 @@ public class DraftManager {
             }
             newIds.forEach(id -> teams.setCaptainRole(g, id, true));
             s.captains = new ArrayList<>(newIds);
+
+            // Build (or rebuild) the pool straight away so leadership can review and trim it.
+            PoolResult pool = buildPool(g, f, s);
+            s.pool = pool.players();
             save(s);
+            fetchStreaks(f, pool.players().stream().filter(p -> p.streak == null).toList());
 
             StringBuilder sb = new StringBuilder("**" + f.getName() + " captains** (pick order):\n");
             for (int i = 0; i < unique.size(); i++) {
                 sb.append(i + 1).append(". ").append(unique.get(i).getAsMention()).append('\n');
             }
-            sb.append("\nEach captain must name their team with `/nameteam` before the draft can start.");
+            sb.append("\n📋 **Pool ready:** ").append(pool.players().size()).append(" players — ")
+                    .append(pool.discord()).append(" on Discord, ").append(pool.tornOnly()).append(" not on Discord.")
+                    .append(pool.note())
+                    .append("\nReview it with `/remainingdraftees` and trim it with `/removeplayer`.")
+                    .append("\nEach captain must name their team with `/nameteam` before the draft can start.");
             return sb.toString();
         });
     }
@@ -266,12 +277,22 @@ public class DraftManager {
                         + String.join(", ", unnamed) + ".");
             }
 
+            // Pool: the one prepared with /buildpool, or build it now (draft role + Torn faction members).
+            String poolNote = "";
+            List<Player> pool;
+            if (s.pool != null) {
+                pool = new ArrayList<>(s.pool);
+            } else {
+                PoolResult built = buildPool(g, f, s);
+                pool = built.players();
+                poolNote = built.note();
+            }
             Set<Long> captainIds = captains.stream().map(Member::getIdLong).collect(Collectors.toSet());
-            List<Player> pool = g.getMembersWithRoles(draftRole).stream()
-                    .filter(m -> !m.getUser().isBot() && !captainIds.contains(m.getIdLong()))
-                    .map(this::toPlayer)
-                    .collect(Collectors.toCollection(ArrayList::new));
-            if (pool.isEmpty()) throw new UserError("Nobody with the " + draftRole.getName() + " role is left to draft.");
+            Set<Long> captainTornIds = captains.stream().map(m -> TornService.parseTornId(m.getEffectiveName()))
+                    .filter(Objects::nonNull).collect(Collectors.toSet());
+            pool.removeIf(p -> captainIds.contains(p.id) || (p.tornId != null && captainTornIds.contains(p.tornId))
+                    || s.isExcluded(p));
+            if (pool.isEmpty()) throw new UserError("Nobody is left in the " + f.getName() + " pool to draft.");
 
             Draft d = new Draft();
             List<Member> order = new ArrayList<>(captains);
@@ -289,15 +310,17 @@ public class DraftManager {
             d.channelId = f.getChannelId();
             d.status = DraftStatus.ACTIVE;
             s.draft = d;
+            s.pool = null; // the prepared pool now lives in the draft
 
             clearOwnMessages(channel); // previous boards, old pings - the new board is the only message
             refreshBoard(f, s, g);
             advance(f, s, g, null);
             commit(f, s, g);
-            fetchStreaks(f, pool);
+            fetchStreaks(f, pool.stream().filter(p -> p.streak == null).toList());
+            long offDiscord = pool.stream().filter(p -> !p.onDiscord()).count();
             return "🏁 " + f.getName() + " draft started in " + channel.getAsMention() + " — " + pool.size()
-                    + " players, " + order.size() + " captains.\nOrder: "
-                    + order.stream().map(Member::getEffectiveName).collect(Collectors.joining(" → "));
+                    + " players (" + offDiscord + " not on Discord), " + order.size() + " captains.\nOrder: "
+                    + order.stream().map(Member::getEffectiveName).collect(Collectors.joining(" → ")) + poolNote;
         });
     }
 
@@ -402,27 +425,64 @@ public class DraftManager {
                 if (wasOnClock && s.draft.status == DraftStatus.ACTIVE) startClock(f, s, g, null, true);
                 commit(f, s, g);
             } else {
+                // Before the draft: new captain leaves the prepared pool, old captain goes back in.
+                if (s.pool != null) s.pool = buildPool(g, f, s).players();
                 save(s);
             }
             return newCap.getEffectiveName() + " is now captain in place of " + oldCap.getEffectiveName() + ".";
         });
     }
 
-    public String addPlayer(Guild g, Member invoker, String opt, long channelId, Member player) {
+    /** Prepares (or rebuilds) a faction's pool before the draft so leadership can review and trim it. */
+    public String buildPool(Guild g, Member invoker, String opt, long channelId) {
         Faction f = resolveLeaderFaction(invoker, opt, channelId);
         return withLock(f.getKey(), () -> {
             FactionState s = state(f);
-            Draft d = s.draft;
-            if (d == null || d.status == DraftStatus.ENDED) {
-                throw new UserError("Start a draft first — everyone with the draft role is added automatically.");
-            }
-            long id = player.getIdLong();
-            if (player.getUser().isBot()) throw new UserError("Bots can't be drafted.");
-            if (d.captainOrder.contains(id)) throw new UserError(player.getEffectiveName() + " is a captain.");
-            if (d.findEligible(id).isPresent()) throw new UserError(player.getEffectiveName() + " is already in the pool.");
-            if (d.isDrafted(id)) throw new UserError(player.getEffectiveName() + " has already been drafted.");
+            if (s.draftRunning()) throw new UserError("A " + f.getName() + " draft is already running.");
+            PoolResult r = buildPool(g, f, s);
+            s.pool = r.players();
+            save(s);
+            fetchStreaks(f, r.players());
+            int excluded = s.excludedIds.size();
+            return "📋 **" + f.getName() + " pool ready:** " + r.players().size() + " players — "
+                    + r.discord() + " on Discord, " + r.tornOnly() + " not on Discord"
+                    + (excluded > 0 ? " (" + excluded + " removed earlier are still left out)" : "") + "."
+                    + r.note()
+                    + "\nReview it with `/remainingdraftees`, trim it with `/removeplayer`, then `/startdraft`.";
+        });
+    }
 
-            Player p = toPlayer(player);
+    public String addPlayer(Guild g, Member invoker, String opt, long channelId, Member member, Long tornId) {
+        if (member == null && tornId == null) throw new UserError("Give either a `member` or a `torn_id`.");
+        Faction f = resolveLeaderFaction(invoker, opt, channelId);
+        return withLock(f.getKey(), () -> {
+            FactionState s = state(f);
+            final Player p;
+            if (member != null) {
+                if (member.getUser().isBot()) throw new UserError("Bots can't be drafted.");
+                p = toPlayer(member);
+            } else {
+                Member linked = memberByTornId(g, tornId);
+                p = linked != null ? toPlayer(linked) : Player.tornOnly(tornId, torn.fetchName(tornId));
+            }
+            if (s.activeCaptains().contains(p.id)) throw new UserError(p.display + " is a captain.");
+
+            if (preDraft(s)) {
+                if (s.pool == null) s.pool = buildPool(g, f, s).players();
+                s.excludedIds.remove(p.id);
+                if (p.tornId != null) s.excludedTornIds.remove(p.tornId);
+                if (s.pool.stream().anyMatch(x -> x.id == p.id)) return p.display + " is already in the pool.";
+                s.pool.add(p);
+                s.pool.sort(Comparator.comparing(x -> x.display.toLowerCase(Locale.ROOT)));
+                save(s);
+                fetchStreaks(f, List.of(p));
+                return "➕ " + p.display + " added to the " + f.getName() + " pool"
+                        + (p.onDiscord() ? "." : " (not on Discord).");
+            }
+
+            Draft d = s.draft;
+            if (d.findEligible(p.id).isPresent()) throw new UserError(p.display + " is already in the pool.");
+            if (d.isDrafted(p.id)) throw new UserError(p.display + " has already been drafted.");
             d.eligible.add(p);
             d.sortEligible();
             if (d.status == DraftStatus.COMPLETE) {
@@ -431,38 +491,125 @@ public class DraftManager {
             }
             commit(f, s, g);
             fetchStreaks(f, List.of(p));
-            return p.display + " added to the pool.";
+            return "➕ " + p.display + " added to the pool" + (p.onDiscord() ? "." : " (not on Discord).");
         });
     }
 
-    public String removePlayer(Guild g, Member invoker, String opt, long channelId, String query) {
+    public String removePlayers(Guild g, Member invoker, String opt, long channelId, List<String> queries) {
         Faction f = resolveLeaderFaction(invoker, opt, channelId);
+        if (queries.isEmpty()) throw new UserError("Pick at least one player to remove.");
         return withLock(f.getKey(), () -> {
             FactionState s = state(f);
-            Draft d = s.draft;
-            if (d == null || d.status == DraftStatus.ENDED) throw new UserError("No " + f.getName() + " draft running.");
+            List<String> done = new ArrayList<>();
 
-            Optional<Player> inPool = tryResolve(d.eligible, query);
-            if (inPool.isPresent()) {
-                Player p = inPool.get();
-                d.eligible.removeIf(x -> x.id == p.id);
-                d.removeFromAllQueues(p.id);
-                if (d.eligible.isEmpty() && d.status.running()) d.status = DraftStatus.COMPLETE;
-                advanceIfNeeded(f, s, g);
-                commit(f, s, g);
-                return p.display + " removed from the pool.";
+            if (preDraft(s)) {
+                if (s.pool == null) throw new UserError("Build the pool first with `/buildpool`.");
+                for (String q : queries) {
+                    Player p = tryResolve(s.pool, q)
+                            .orElseThrow(() -> new UserError("Nobody in the prepared pool matches `" + q + "`."));
+                    s.pool.removeIf(x -> x.id == p.id);
+                    s.excludedIds.add(p.id);
+                    if (p.tornId != null) s.excludedTornIds.add(p.tornId);
+                    done.add(p.display);
+                }
+                save(s);
+                return "➖ Removed from the " + f.getName() + " pool: " + String.join(", ", done)
+                        + ".\nThey stay out even if you rebuild the pool (`/addplayer` brings someone back).";
             }
 
-            List<Player> drafted = d.picks.stream().filter(pk -> !pk.dropped).map(pk -> pk.player).toList();
-            Player p = tryResolve(drafted, query)
-                    .orElseThrow(() -> new UserError("No player in the pool or on a team matches `" + query + "`."));
-            Pick pick = d.picks.stream().filter(pk -> !pk.dropped && pk.player.id == p.id).findFirst().orElseThrow();
-            pick.dropped = true;
-            teams.removeMember(g, s.teams.get(pick.captainId), p.id);
+            Draft d = s.draft;
+            if (d == null || d.status == DraftStatus.ENDED) throw new UserError("No " + f.getName() + " draft running.");
+            for (String q : queries) {
+                Optional<Player> inPool = tryResolve(d.eligible, q);
+                if (inPool.isPresent()) {
+                    Player p = inPool.get();
+                    d.eligible.removeIf(x -> x.id == p.id);
+                    d.removeFromAllQueues(p.id);
+                    done.add(p.display + " (from the pool)");
+                    continue;
+                }
+                List<Player> drafted = d.picks.stream().filter(pk -> !pk.dropped).map(pk -> pk.player).toList();
+                Player p = tryResolve(drafted, q)
+                        .orElseThrow(() -> new UserError("No player in the pool or on a team matches `" + q + "`."));
+                Pick pick = d.picks.stream().filter(pk -> !pk.dropped && pk.player.id == p.id).findFirst().orElseThrow();
+                pick.dropped = true;
+                teams.removeMember(g, s.teams.get(pick.captainId), p.id);
+                done.add(p.display + " (from " + s.teamName(pick.captainId, d.captainName(pick.captainId))
+                        + " — the pick slot stays used)");
+            }
+            if (d.eligible.isEmpty() && d.status.running()) d.status = DraftStatus.COMPLETE;
+            advanceIfNeeded(f, s, g);
             commit(f, s, g);
-            return p.display + " removed from " + s.teamName(pick.captainId, d.captainName(pick.captainId))
-                    + ". The pick slot stays used.";
+            return "➖ Removed: " + String.join("; ", done) + ".";
         });
+    }
+
+    /** Before a draft: no draft running, and either a pool is being prepared or there's no live/finished draft to edit. */
+    private boolean preDraft(FactionState s) {
+        return !s.draftRunning() && (s.pool != null || s.draft == null || s.draft.status == DraftStatus.ENDED);
+    }
+
+    private record PoolResult(List<Player> players, int discord, int tornOnly, String note) {}
+
+    /**
+     * Pool = everyone with the faction's draft role + every member of the Torn faction.
+     * Torn members are linked to Discord when a member's nickname contains their Torn ID;
+     * the rest join as Torn-only players. Captains and excluded players are left out.
+     */
+    private PoolResult buildPool(Guild g, Faction f, FactionState s) {
+        Role draftRole = g.getRoleById(f.getDraftRoleId());
+        if (draftRole == null) throw new UserError("I can't find the " + f.getName() + " draft role.");
+        Set<Long> capIds = new HashSet<>(s.activeCaptains());
+        Set<Long> capTorn = capIds.stream().map(g::getMemberById).filter(Objects::nonNull)
+                .map(m -> TornService.parseTornId(m.getEffectiveName())).filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        Map<Long, Player> byId = new LinkedHashMap<>();
+        for (Member m : g.getMembersWithRoles(draftRole)) {
+            if (m.getUser().isBot() || capIds.contains(m.getIdLong())) continue;
+            Player p = toPlayer(m);
+            if (p.tornId != null && capTorn.contains(p.tornId)) continue;
+            byId.put(p.id, p);
+        }
+
+        String note = "";
+        if (f.getTornFactionId() > 0) {
+            Map<Long, String> members = Map.of();
+            try {
+                members = torn.fetchFactionMembers(f.getTornFactionId());
+            } catch (UserError e) {
+                note = "\n⚠️ Couldn't load the Torn faction member list (" + e.getMessage()
+                        + ") — the pool only has Discord members with the draft role.";
+            }
+            Map<Long, Member> discordByTorn = new HashMap<>();
+            for (Member m : g.getMembers()) {
+                Long t = TornService.parseTornId(m.getEffectiveName());
+                if (t != null && !m.getUser().isBot()) discordByTorn.putIfAbsent(t, m);
+            }
+            Set<Long> tornInPool = byId.values().stream().map(p -> p.tornId).filter(Objects::nonNull)
+                    .collect(Collectors.toSet());
+            for (Map.Entry<Long, String> e : members.entrySet()) {
+                long tid = e.getKey();
+                if (capTorn.contains(tid) || tornInPool.contains(tid)) continue;
+                Member m = discordByTorn.get(tid);
+                if (m != null && capIds.contains(m.getIdLong())) continue;
+                Player p = m != null ? toPlayer(m) : Player.tornOnly(tid, e.getValue());
+                byId.putIfAbsent(p.id, p);
+            }
+        }
+
+        List<Player> players = byId.values().stream()
+                .filter(p -> !s.isExcluded(p))
+                .sorted(Comparator.comparing(p -> p.display.toLowerCase(Locale.ROOT)))
+                .collect(Collectors.toCollection(ArrayList::new));
+        int discord = (int) players.stream().filter(Player::onDiscord).count();
+        return new PoolResult(players, discord, players.size() - discord, note);
+    }
+
+    private Member memberByTornId(Guild g, long tornId) {
+        return g.getMembers().stream()
+                .filter(m -> !m.getUser().isBot() && Objects.equals(TornService.parseTornId(m.getEffectiveName()), tornId))
+                .findFirst().orElse(null);
     }
 
     /** Validates /enddraft before the confirm buttons are shown. */
@@ -675,16 +822,21 @@ public class DraftManager {
     public List<MessageEmbed> remaining(Member m, String opt, long channelId) {
         Faction f = resolveViewFaction(m, opt, channelId);
         return withLock(f.getKey(), () -> {
-            Draft d = requireRunning(state(f), f);
-            if (d.eligible.isEmpty()) throw new UserError("Nobody is left in the pool.");
+            FactionState s = state(f);
+            // Before the draft this shows the prepared pool so leadership can review it.
+            boolean prepared = !s.draftRunning() && s.pool != null;
+            List<Player> players = prepared ? s.pool : requireRunning(s, f).eligible;
+            if (players.isEmpty()) throw new UserError("Nobody is in the pool.");
+            String label = prepared ? " prepared pool — " + players.size() + " players" : " pool — " + players.size() + " left";
             List<MessageEmbed> embeds = new ArrayList<>();
             int perPage = 60;
-            int pages = (d.eligible.size() + perPage - 1) / perPage;
+            int pages = (players.size() + perPage - 1) / perPage;
             for (int i = 0; i < pages && i < 10; i++) {
-                String body = d.eligible.subList(i * perPage, Math.min(d.eligible.size(), (i + 1) * perPage)).stream()
-                        .map(p -> "• " + p.display + p.streakLabel()).collect(Collectors.joining("\n"));
+                String body = players.subList(i * perPage, Math.min(players.size(), (i + 1) * perPage)).stream()
+                        .map(p -> "• " + p.display + p.streakLabel() + (p.onDiscord() ? "" : " *(not on Discord)*"))
+                        .collect(Collectors.joining("\n"));
                 embeds.add(new EmbedBuilder()
-                        .setTitle(f.getName() + " pool — " + d.eligible.size() + " left" + (pages > 1 ? " (" + (i + 1) + "/" + pages + ")" : ""))
+                        .setTitle(f.getName() + label + (pages > 1 ? " (" + (i + 1) + "/" + pages + ")" : ""))
                         .setDescription(body)
                         .setColor(0x5865F2)
                         .build());
@@ -716,7 +868,10 @@ public class DraftManager {
                 int n = s.teams.size();
                 s.teams.values().forEach(t -> teams.delete(g, t));
                 s.teams.clear();
-                s.draft = null; // finished drafts stay visible on their pinned boards
+                s.draft = null; // finished drafts stay visible on their boards
+                s.pool = null;
+                s.excludedIds.clear();
+                s.excludedTornIds.clear();
                 if (clearCaptains) s.captains.clear();
                 save(s);
                 return n;
@@ -941,7 +1096,9 @@ public class DraftManager {
         log.info("{}: fetching Torn streaks for {} players (pass {})", f.getName(), ids.size(), attempt);
         torn.fetchStreaks(ids,
                 (discordId, streak) -> withLock(f.getKey(), () -> {
-                    Draft d = state(f).draft;
+                    FactionState fs = state(f);
+                    if (fs.pool != null) fs.pool.stream().filter(p -> p.id == discordId).forEach(p -> p.streak = streak);
+                    Draft d = fs.draft;
                     if (d == null) return null;
                     d.eligible.stream().filter(p -> p.id == discordId).forEach(p -> p.streak = streak);
                     d.picks.stream().filter(p -> p.player.id == discordId).forEach(p -> p.player.streak = streak);
@@ -968,8 +1125,9 @@ public class DraftManager {
 
     /** Players in a running draft (pool or drafted) with a Torn ID but no streak yet. */
     private List<Player> missingStreaks(FactionState s) {
-        if (!s.draftRunning()) return List.of();
         List<Player> out = new ArrayList<>();
+        if (s.pool != null) s.pool.stream().filter(p -> p.tornId != null && p.streak == null).forEach(out::add);
+        if (!s.draftRunning()) return out;
         s.draft.eligible.stream().filter(p -> p.tornId != null && p.streak == null).forEach(out::add);
         s.draft.picks.stream().map(pk -> pk.player).filter(p -> p.tornId != null && p.streak == null).forEach(out::add);
         return out;
@@ -988,9 +1146,10 @@ public class DraftManager {
     private Optional<Player> tryResolve(List<Player> players, String query) {
         if (query == null || query.isBlank()) return Optional.empty();
         String q = query.trim();
-        if (q.matches("\\d{15,20}")) {
-            long id = Long.parseLong(q);
-            Optional<Player> byId = players.stream().filter(p -> p.id == id).findFirst();
+        if (q.matches("-?\\d{1,20}")) {
+            long n = Long.parseLong(q);
+            Optional<Player> byId = players.stream()
+                    .filter(p -> p.id == n || (p.tornId != null && p.tornId == n)).findFirst();
             if (byId.isPresent()) return byId;
         }
         String lower = q.toLowerCase(Locale.ROOT);
@@ -1066,8 +1225,11 @@ public class DraftManager {
         Draft d = s.draft;
         Set<Long> caps = new HashSet<>(s.captains);
         if (s.draftRunning()) caps.addAll(d.captainOrder);
+        List<Player> available = s.draftRunning() ? d.eligible
+                : s.pool != null ? s.pool
+                : d != null ? d.eligible : List.of();
         snapshots.put(s.factionKey, new Snapshot(
-                d == null ? List.of() : List.copyOf(d.eligible),
+                List.copyOf(available),
                 d == null ? List.of() : d.picks.stream().filter(p -> !p.dropped).map(p -> p.player).toList(),
                 Set.copyOf(caps),
                 d == null ? null : d.status));
