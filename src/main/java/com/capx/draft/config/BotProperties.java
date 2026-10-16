@@ -14,6 +14,7 @@ public class BotProperties {
     private long captainRoleId;
     private long teamCategoryId;
     private int maxQueue = 5;
+    private List<Long> teamChannelRoleIds = new ArrayList<>();
     private List<Faction> factions = new ArrayList<>();
 
     public Optional<Faction> faction(String key) {
@@ -53,6 +54,8 @@ public class BotProperties {
     public void setTeamCategoryId(long teamCategoryId) { this.teamCategoryId = teamCategoryId; }
     public int getMaxQueue() { return maxQueue; }
     public void setMaxQueue(int maxQueue) { this.maxQueue = maxQueue; }
+    public List<Long> getTeamChannelRoleIds() { return teamChannelRoleIds; }
+    public void setTeamChannelRoleIds(List<Long> ids) { this.teamChannelRoleIds = ids; }
     public List<Faction> getFactions() { return factions; }
     public void setFactions(List<Faction> factions) { this.factions = factions; }
 }

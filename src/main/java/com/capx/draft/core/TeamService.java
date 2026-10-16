@@ -73,27 +73,31 @@ public class TeamService {
                 .setMentionable(true)
                 .complete();
         team.roleId = role.getIdLong();
-        Role leaders = guild.getRoleById(faction.getLeadershipRoleId());
+        List<Role> extraRoles = props.getTeamChannelRoleIds().stream()
+                .map(guild::getRoleById).filter(java.util.Objects::nonNull).toList();
         Set<String> refused = new TreeSet<>();
 
-        // Born private: hidden from @everyone, visible to the bot. Everything else is added afterwards.
+        // Born private: nothing copied from the category, hidden from @everyone, visible to the bot.
+        // Team access is added afterwards.
         TextChannel text = category.createTextChannel(textName(faction, team.name))
+                .clearPermissionOverrides()
                 .addRolePermissionOverride(guild.getPublicRole().getIdLong(), NONE, HIDE)
                 .addMemberPermissionOverride(self.getIdLong(), HIDE, NONE)
                 .complete();
         team.textChannelId = text.getIdLong();
         grant(text, self, only(BOT_TEXT, has), refused, "bot");
         grant(text, role, only(TEXT_ALLOW, has), refused, "team");
-        if (leaders != null) grant(text, leaders, only(TEXT_ALLOW, has), refused, "leadership");
+        for (Role r : extraRoles) grant(text, r, only(TEXT_ALLOW, has), refused, r.getName());
 
         VoiceChannel voice = category.createVoiceChannel(voiceName(faction, team.name))
+                .clearPermissionOverrides()
                 .addRolePermissionOverride(guild.getPublicRole().getIdLong(), NONE, HIDE)
                 .addMemberPermissionOverride(self.getIdLong(), HIDE, NONE)
                 .complete();
         team.voiceChannelId = voice.getIdLong();
         grant(voice, self, only(BOT_VOICE, has), refused, "bot");
         grant(voice, role, only(VOICE_ALLOW, has), refused, "team");
-        if (leaders != null) grant(voice, leaders, only(VOICE_ALLOW, has), refused, "leadership");
+        for (Role r : extraRoles) grant(voice, r, only(VOICE_ALLOW, has), refused, r.getName());
 
         memberIds.forEach(id -> addMember(guild, team, id));
         if (!refused.isEmpty()) log.warn("Team {}: Discord refused {}", team.name, refused);

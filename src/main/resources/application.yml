@@ -21,6 +21,11 @@ draftbot:
   # Category where team text + voice channels are created (all factions)
   team-category-id: 1560730618751352873
 
+  # Roles that can see every team's channels, on top of the team's own role.
+  # Captain role = every captain sees every team. Use [] for team members only.
+  team-channel-role-ids:
+    - 1422656496088514632
+
   # Max players a captain can queue
   max-queue: 5
 
