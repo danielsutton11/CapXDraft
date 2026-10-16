@@ -3,7 +3,7 @@
 Snake-draft bot for the five X factions sharing one Discord server. Each faction runs its own
 draft, in its own channel, at the same time as the others.
 
-Stack: Java 21 · Spring Boot 3.3 · JDA 5 · Postgres (Railway).
+Stack: Java 21 · Spring Boot 3.3 · JDA 6 · Postgres (Railway).
 
 ## Commands
 
@@ -14,15 +14,19 @@ There are only two:
 - **`/pick`** makes your pick, with live name suggestions.
 
 ### Leadership panel
-Before the draft: **Set Captains** (also builds the participant list), **Name Team** (for any captain),
-**Replace Captain**, **Participants**, **Add Player** (Discord member or Torn ID), **Remove Players**
-(search, then tick up to 25), **Rebuild List**, and **Start Draft** (timer, auto-pick and order
-options — only enabled once there are 2+ captains and every team is named).
+Panels use Discord's newer layout: one coloured box with section headings.
 
-During the draft: **Pause/Resume**, **Undo**, **Admin Pick**, **End Draft**, plus Participants,
-Add/Remove Players, Replace Captain and Rename Team.
+Before the draft:
+- **📋 Setup — required, in order:** a checklist plus one row of buttons — **Captains** (also builds
+  the participant list) → **Team Names** → **Competition Times** → **API Keys**. Each gets a ✅ when
+  done and the next step is blue. **▶️ Start Draft** appears under them once all four are done.
+- **👥 Participants:** View, Add (Discord member or Torn ID), Remove, Rebuild List.
+- **👑 Captains:** the list, Replace Captain, My Team (if you're a captain too).
+- **🏁 Competition:** live status.
+- Teardown (admins only) and Close.
 
-Server admins also get **Teardown**, which deletes every faction's team roles and channels.
+During the draft: Pause/Resume, Undo, Admin Pick at the top, then Participants, Teams (Replace
+Captain, Team Names), Competition (times and keys), and End Draft.
 
 ### Captain panel
 Your team, your picks and your **queue** — **Add to Queue** (search, then choose), **Remove from
@@ -59,7 +63,7 @@ A read-only status view: who's on the clock, the captains and their teams, and t
 
 Each faction's leaders set it up from `/draft`:
 
-- **🗓️ Competition Times** — start and end in TCT (`2026-10-25 18:00`). The start can't move once it's live.
+- **🗓️ Competition Times** — start and end in TCT (`25-10-2026 18:00`). The start can't move once it's live.
 - **🔑 API Keys** — Limited keys from members with **Faction API Access**. Each key is checked
   (valid, in this faction, can read faction attacks) and stored AES-encrypted; it's never shown again.
   Add two or more so monitoring survives one being removed.

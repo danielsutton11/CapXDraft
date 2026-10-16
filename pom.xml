@@ -19,7 +19,7 @@
 
     <properties>
         <java.version>21</java.version>
-        <jda.version>5.2.1</jda.version>
+        <jda.version>6.7.0</jda.version>
     </properties>
 
     <dependencies>
