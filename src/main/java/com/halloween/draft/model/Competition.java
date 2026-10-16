@@ -14,6 +14,10 @@ public class Competition {
     public Long scoreboardMessageId;
     public boolean finalPosted;
     public boolean keysFailingNotified;
+    /** Leaders were told the competition starts soon while the draft is still running. */
+    public boolean draftSoonWarned;
+    /** Leaders were told the competition started while the draft is still running. */
+    public boolean draftLiveWarned;
 
     public boolean scheduled() {
         return startEpoch != null && endEpoch != null;

@@ -388,7 +388,8 @@ public class PanelController {
 
         boolean captainsDone = p.captains().size() >= 2;
         boolean namesDone = captainsDone && p.allTeamsNamed();
-        boolean timesDone = comp.start() != null;
+        boolean timesPassed = comp.start() != null && comp.start() <= System.currentTimeMillis() / 1000;
+        boolean timesDone = comp.start() != null && !timesPassed;
         boolean keysDone = comp.keys() >= CompetitionService.MIN_KEYS;
         int done = (captainsDone ? 1 : 0) + (namesDone ? 1 : 0) + (timesDone ? 1 : 0) + (keysDone ? 1 : 0);
         // The first unfinished step, in order, is the one to highlight.
@@ -404,7 +405,8 @@ public class PanelController {
                 + check(namesDone, next == 1, "Team names", p.captains().isEmpty() ? "after captains"
                 : named + " of " + p.captains().size()) + "\n"
                 + check(timesDone, next == 2, "Competition times", timesDone
-                ? DraftManager.tct(comp.start()) + " → " + DraftManager.tct(comp.end()) + " TCT" : "not set") + "\n"
+                ? DraftManager.tct(comp.start()) + " → " + DraftManager.tct(comp.end()) + " TCT"
+                : timesPassed ? "start has passed, set new times" : "not set") + "\n"
                 + check(keysDone, next == 3, "API keys", comp.keys() + " of " + CompetitionService.MIN_KEYS));
         ui.buttons(
                 step(captainsDone, next == 0, id("setcap", f), "👑", "Captains"),

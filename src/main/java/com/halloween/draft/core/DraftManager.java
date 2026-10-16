@@ -284,6 +284,12 @@ public class DraftManager {
             if (!s.competition.scheduled()) {
                 throw new UserError("Set the competition times first (🗓️ Competition Times).");
             }
+            // Hits count for whoever is on a team, so the draft must start before the competition does;
+            // otherwise hits made before the teams existed would land on late picks.
+            if (System.currentTimeMillis() / 1000 >= s.competition.startEpoch) {
+                throw new UserError("The competition already started at " + tct(s.competition.startEpoch)
+                        + " TCT. Set a later start under 🗓️ Competition Times before starting the draft.");
+            }
             int keys = competitionRepo.keys(f.getKey()).size();
             int needed = com.halloween.draft.competition.CompetitionService.MIN_KEYS;
             if (keys < needed) {
@@ -324,6 +330,8 @@ public class DraftManager {
             d.status = DraftStatus.ACTIVE;
             s.draft = d;
             s.pool = null; // the prepared pool now lives in the draft
+            s.competition.draftSoonWarned = false; // a new draft gets its own overrun warnings
+            s.competition.draftLiveWarned = false;
 
             clearOwnMessages(channel); // previous boards, old pings - the new board is the only message
             refreshBoard(f, s, g);
@@ -331,9 +339,22 @@ public class DraftManager {
             commit(f, s, g);
             fetchStreaks(f, pool.stream().filter(p -> p.streak == null).toList());
             long offDiscord = pool.stream().filter(p -> !p.onDiscord()).count();
+
+            // With a timer, the slowest case is every pick using its full time. Warn if that would run
+            // into the competition, since late picks would then be credited with earlier hits.
+            String overrun = "";
+            if (timerSeconds > 0) {
+                long worstEnd = System.currentTimeMillis() / 1000 + (long) pool.size() * timerSeconds;
+                if (worstEnd > s.competition.startEpoch) {
+                    overrun = "\n⚠️ If every pick uses the full " + timerSeconds / 60 + " minutes, the draft could run until "
+                            + tct(worstEnd) + " TCT — past the competition start at " + tct(s.competition.startEpoch)
+                            + " TCT. Leaders will be DM'd 30 minutes before the start if it's still running.";
+                }
+            }
             return "🏁 " + f.getName() + " draft started in " + channel.getAsMention() + " — " + pool.size()
                     + " players (" + offDiscord + " not on Discord), " + order.size() + " captains.\nOrder: "
-                    + order.stream().map(Member::getEffectiveName).collect(Collectors.joining(" → ")) + poolNote;
+                    + order.stream().map(Member::getEffectiveName).collect(Collectors.joining(" → ")) + poolNote
+                    + overrun;
         });
     }
 
@@ -1052,10 +1073,16 @@ public class DraftManager {
             if (c.live(now) && !start.equals(c.startEpoch)) {
                 throw new UserError("The competition has already started — only the end time can change.");
             }
-            if (!c.live(now) && end <= now) throw new UserError("That end time is already in the past.");
+            if (!c.live(now) && start <= now) {
+                throw new UserError("The start time has to be in the future — it's " + tct(now) + " TCT now.");
+            }
             if (!start.equals(c.startEpoch)) c.lastFetchedEpoch = null; // new window: fetch from its start
             c.startEpoch = start;
             c.endEpoch = end;
+            if (!c.live(now)) { // new or moved start: warnings about it are due again
+                c.draftSoonWarned = false;
+                c.draftLiveWarned = false;
+            }
             if (end > now) c.finalPosted = false;
             save(s);
             return "🗓️ Competition set: **" + tct(start) + "** → **" + tct(end) + "** TCT.";

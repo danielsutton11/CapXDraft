@@ -16,6 +16,7 @@ import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageEmbed;
+import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.exceptions.ErrorResponseException;
 import net.dv8tion.jda.api.requests.ErrorResponse;
@@ -99,6 +100,7 @@ public class CompetitionService {
         Competition c = drafts.competition(f);
         if (!c.scheduled() || c.finalPosted) return;
         long now = Instant.now().getEpochSecond();
+        warnIfDraftOverruns(f, c, now);
 
         if (c.live(now) || c.over(now)) {
             long to = Math.min(now, c.endEpoch);
@@ -118,6 +120,51 @@ public class CompetitionService {
             }
         }
         refreshScoreboard(f);
+    }
+
+    private static final long DRAFT_WARN_SECONDS = 30 * 60;
+
+    /**
+     * DMs the faction's leaders if its draft is still running 30 minutes before the competition
+     * starts, and again when it starts: hits count for whoever is on a team, so players picked
+     * after the start would bring their earlier hits with them.
+     */
+    private void warnIfDraftOverruns(Faction f, Competition c, long now) {
+        DraftManager.Snapshot snap = drafts.snapshot(f.getKey());
+        boolean running = snap != null && snap.status() != null && snap.status().running();
+        if (!running || c.over(now)) return;
+
+        String text;
+        if (c.live(now) && !c.draftLiveWarned) {
+            text = "🚨 **" + f.getName() + ":** the competition started at " + DraftManager.tct(c.startEpoch)
+                    + " TCT but the draft is still running (" + snap.eligible().size() + " players left). "
+                    + "Anyone picked from now on brings their hits since the start with them. "
+                    + "Finish the draft quickly, or use `/draft` → 🛑 End Draft.";
+            drafts.updateCompetition(f, x -> { x.draftLiveWarned = true; x.draftSoonWarned = true; });
+        } else if (!c.live(now) && c.startEpoch - now <= DRAFT_WARN_SECONDS && !c.draftSoonWarned) {
+            text = "⏰ **" + f.getName() + ":** the competition starts <t:" + c.startEpoch + ":R> ("
+                    + DraftManager.tct(c.startEpoch) + " TCT) and the draft is still running ("
+                    + snap.eligible().size() + " players left). Players picked after the start would bring "
+                    + "their earlier hits with them, so try to finish before then — or move the start under "
+                    + "🗓️ Competition Times.";
+            drafts.updateCompetition(f, x -> x.draftSoonWarned = true);
+        } else {
+            return;
+        }
+        dmLeaders(f, text);
+    }
+
+    private void dmLeaders(Faction f, String text) {
+        JDA j = jda;
+        if (j == null) return;
+        TextChannel ch = j.getTextChannelById(f.getChannelId());
+        Role role = ch == null ? null : ch.getGuild().getRoleById(f.getLeadershipRoleId());
+        if (role == null) {
+            log.warn("Can't DM {} leaders: leadership role {} not found", f.getName(), f.getLeadershipRoleId());
+            return;
+        }
+        ch.getGuild().getMembersWithRoles(role).stream().filter(m -> !m.getUser().isBot()).forEach(m ->
+                m.getUser().openPrivateChannel().flatMap(pc -> pc.sendMessage(text)).queue(null, e -> {}));
     }
 
     /** Fetches with the faction's keys in turn until one works. Returns false if none did. */
