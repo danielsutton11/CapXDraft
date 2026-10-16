@@ -582,8 +582,9 @@ public class DraftManager {
                     s.draft.picksFor(me).stream().filter(p -> !p.dropped).forEach(p -> members.add(p.player.id));
                 }
                 int colour = Math.max(0, s.activeCaptains().indexOf(me));
+                Set<String> refused;
                 try {
-                    teams.create(g, f, team, colour, members);
+                    refused = teams.create(g, f, team, colour, members);
                 } catch (Exception e) {
                     log.error("Team creation failed for {}", name, e);
                     teams.delete(g, team);
@@ -593,6 +594,10 @@ public class DraftManager {
                             + "Check my role has Manage Roles and Manage Channels and sits above the team roles.");
                 }
                 reply = "Team **" + name + "** created with its own role, <#" + team.textChannelId + "> and a voice channel.";
+                if (!refused.isEmpty()) {
+                    reply += "\n⚠️ Discord wouldn't let me grant: " + String.join("; ", refused)
+                            + ". The channels work, but give my role those permissions if you want them included.";
+                }
                 announce(g, f, "🏷️ " + captain.getAsMention() + " named their team **" + name + "**.");
             } else {
                 String old = team.name;
