@@ -105,7 +105,7 @@ public class BoardRenderer {
                     .append(" (").append(last.method.verb).append(")\n");
         }
 
-        String footer = d.eligible.size() + " left in pool · "
+        String footer = d.eligible.size() + " participants left · "
                 + (d.timerSeconds > 0 ? "Timer " + duration(d.timerSeconds) : "No timer")
                 + " · Auto-pick " + (d.autopick ? "on" : "off");
 

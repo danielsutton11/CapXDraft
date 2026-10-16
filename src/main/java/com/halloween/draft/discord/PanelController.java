@@ -161,7 +161,7 @@ public class PanelController {
                 String summary = drafts.checkTeardown(m);
                 yield new View(List.of(embed("🧹 Teardown — all factions",
                         "This deletes **" + summary + "**: their roles, captain roles, text and voice channels, "
-                                + "the prepared pools and removals.\nRemove the Halloween Captain role from everyone too?")),
+                                + "the prepared participant lists and removals.\nRemove the Halloween Captain role from everyone too?")),
                         List.of(ActionRow.of(
                                 Button.danger(id("tdok", f, "1"), "Delete all + clear captains"),
                                 Button.danger(id("tdok", f, "0"), "Delete all, keep captains"),
@@ -290,10 +290,10 @@ public class PanelController {
                     style(needNames, id("name", f), "🏷️ Team Names").withDisabled(p.captains().isEmpty()),
                     Button.secondary(id("repl", f), "🔁 Replace Captain").withDisabled(p.captains().isEmpty())));
             rows.add(ActionRow.of(
-                    Button.secondary(id("pool", f, "0"), "📋 Pool").withDisabled(!p.poolPrepared()),
+                    Button.secondary(id("pool", f, "0"), "📋 Participants").withDisabled(!p.poolPrepared()),
                     Button.secondary(id("add", f), "➕ Add"),
                     Button.secondary(id("rm", f), "➖ Remove").withDisabled(!p.poolPrepared()),
-                    Button.secondary(id("rebuild", f), "🔄 Rebuild")));
+                    Button.secondary(id("rebuild", f), "🔄 Rebuild List")));
             List<Button> go = new ArrayList<>();
             go.add(ready ? Button.success(id("start", f), "▶️ Start Draft")
                     : Button.secondary(id("start", f), "▶️ Start Draft").asDisabled());
@@ -306,7 +306,7 @@ public class PanelController {
                     Button.secondary(id("undo", f), "↩️ Undo").withDisabled(p.picksMade() == 0),
                     Button.secondary(id("apick", f), "🛡️ Admin Pick")));
             rows.add(ActionRow.of(
-                    Button.secondary(id("pool", f, "0"), "📋 Pool"),
+                    Button.secondary(id("pool", f, "0"), "📋 Participants"),
                     Button.secondary(id("add", f), "➕ Add"),
                     Button.secondary(id("rm", f), "➖ Remove")));
             List<Button> team = new ArrayList<>();
@@ -329,16 +329,16 @@ public class PanelController {
     private View viewerHome(Guild g, Faction f, String notice) {
         PanelInfo p = drafts.panelInfo(g, f);
         return View.of(statusEmbed(p, "🏆 " + f.getName() + " · Draft", notice, null), List.of(ActionRow.of(
-                Button.secondary(id("pool", f, "0"), "📋 Pool").withDisabled(!p.poolPrepared()),
+                Button.secondary(id("pool", f, "0"), "📋 Participants").withDisabled(!p.poolPrepared()),
                 Button.secondary(id("close", f), "✖ Close"))));
     }
 
     /** The one thing a leader should do next, shown under the status. */
     private static String nextStep(PanelInfo p) {
         if (p.running()) return null;
-        if (p.captains().size() < 2) return "Choose at least 2 captains with **👑 Captains** — that also builds the pool.";
+        if (p.captains().size() < 2) return "Choose at least 2 captains with **👑 Captains** — that also builds the participant list.";
         if (!p.allTeamsNamed()) return "Every team needs a name — use **🏷️ Team Names** (or let captains name their own).";
-        return "All set — check the pool, then **▶️ Start Draft**.";
+        return "All set — check the participants, then **▶️ Start Draft**.";
     }
 
     /** Coloured (primary) when it's the recommended next step, grey otherwise. */
@@ -369,7 +369,7 @@ public class PanelController {
         }
         rows.add(ActionRow.of(
                 style(c.team() == null, id("name", f), c.team() == null ? "🏷️ Name Team" : "🏷️ Rename Team"),
-                Button.secondary(id("pool", f, "0"), "📋 Pool"),
+                Button.secondary(id("pool", f, "0"), "📋 Participants"),
                 drafts.isLeader(m, f) ? Button.secondary(id("home", f), "🎛️ Control Panel")
                         : Button.secondary(id("my", f), "🔄 Refresh")));
         rows.add(ActionRow.of(Button.secondary(id("close", f), "✖ Close")));
@@ -378,8 +378,8 @@ public class PanelController {
 
     private View setCaptainsView(Faction f) {
         return new View(List.of(embed("👑 Set Captains",
-                "Choose 2–9 captains. Setting captains also builds the draft pool.\n"
-                        + "Anyone removed from the pool earlier stays out.")),
+                "Choose 2–9 captains. Setting captains also builds the participant list.\n"
+                        + "Anyone removed from the participants earlier stays out.")),
                 List.of(ActionRow.of(EntitySelectMenu.create(id("setcapusers", f), EntitySelectMenu.SelectTarget.USER)
                                 .setPlaceholder("Choose captains").setRequiredRange(2, 9).build()),
                         ActionRow.of(Button.secondary(id("home", f), "Back"))));
@@ -433,10 +433,10 @@ public class PanelController {
         int pages = Math.max(1, (pool.size() + POOL_PAGE - 1) / POOL_PAGE);
         int pg = Math.max(0, Math.min(page, pages - 1));
         long off = pool.stream().filter(p -> !p.onDiscord()).count();
-        String body = pool.isEmpty() ? "*The pool is empty.*"
+        String body = pool.isEmpty() ? "*No participants.*"
                 : bullets(pool.subList(pg * POOL_PAGE, Math.min(pool.size(), (pg + 1) * POOL_PAGE)), POOL_PAGE);
         MessageEmbed e = new EmbedBuilder()
-                .setTitle("📋 " + f.getName() + " pool — " + pool.size() + " players")
+                .setTitle("📋 " + f.getName() + " participants — " + pool.size())
                 .setDescription(body)
                 .setFooter("Page " + (pg + 1) + "/" + pages + " · " + off + " not on Discord")
                 .setColor(BLURPLE).build();
@@ -552,8 +552,8 @@ public class PanelController {
         }
         eb.addField("👑 Captains" + (p.running() ? " · picks" : ""), caps.length() == 0 ? "*none yet*" : caps.toString(), false);
 
-        eb.addField("📋 Pool", p.poolPrepared()
-                ? "**" + p.poolSize() + "** " + (p.running() ? "left" : "players") + "\n" + p.poolOffDiscord() + " not on Discord"
+        eb.addField("📋 Participants", p.poolPrepared()
+                ? "**" + p.poolSize() + "** " + (p.running() ? "left to pick" : "players") + "\n" + p.poolOffDiscord() + " not on Discord"
                 : "*built when captains are set*", true);
         if (p.running()) {
             eb.addField("⚙️ Settings", (p.timerSeconds() > 0 ? p.timerSeconds() / 60 + " min timer" : "No timer")

@@ -231,7 +231,7 @@ public class DraftManager {
             save(s);
             fetchStreaks(f, pool.players().stream().filter(p -> p.streak == null).toList());
 
-            return "✅ **" + unique.size() + " captains set** and the pool is built ("
+            return "✅ **" + unique.size() + " captains set** and the participant list is built ("
                     + pool.players().size() + " players)." + pool.note();
         });
     }
@@ -285,7 +285,7 @@ public class DraftManager {
                     .filter(Objects::nonNull).collect(Collectors.toSet());
             pool.removeIf(p -> captainIds.contains(p.id) || (p.tornId != null && captainTornIds.contains(p.tornId))
                     || s.isExcluded(p));
-            if (pool.isEmpty()) throw new UserError("Nobody is left in the " + f.getName() + " pool to draft.");
+            if (pool.isEmpty()) throw new UserError("There are no " + f.getName() + " participants left to draft.");
 
             Draft d = new Draft();
             List<Member> order = new ArrayList<>(captains);
@@ -358,7 +358,7 @@ public class DraftManager {
 
             advance(f, s, g, null);
             commit(f, s, g);
-            return "↩️ Undid pick #" + undone.number + " (**" + undone.player.display + "**) — they're back in the pool.";
+            return "↩️ Undid pick #" + undone.number + " (**" + undone.player.display + "**) — they're back in the participants.";
         });
     }
 
@@ -437,7 +437,7 @@ public class DraftManager {
             save(s);
             fetchStreaks(f, r.players());
             int excluded = s.excludedIds.size();
-            return "🔄 **Pool rebuilt:** " + r.players().size() + " players"
+            return "🔄 **Participants rebuilt:** " + r.players().size() + " players"
                     + (excluded > 0 ? " (" + excluded + " removed earlier are still left out)" : "") + "." + r.note();
         });
     }
@@ -461,17 +461,17 @@ public class DraftManager {
                 if (s.pool == null) s.pool = buildPool(g, f, s).players();
                 s.excludedIds.remove(p.id);
                 if (p.tornId != null) s.excludedTornIds.remove(p.tornId);
-                if (s.pool.stream().anyMatch(x -> x.id == p.id)) return p.display + " is already in the pool.";
+                if (s.pool.stream().anyMatch(x -> x.id == p.id)) return p.display + " is already a participant.";
                 s.pool.add(p);
                 s.pool.sort(Comparator.comparing(x -> x.display.toLowerCase(Locale.ROOT)));
                 save(s);
                 fetchStreaks(f, List.of(p));
-                return "➕ " + p.display + " added to the " + f.getName() + " pool"
+                return "➕ " + p.display + " added to the " + f.getName() + " participants"
                         + (p.onDiscord() ? "." : " (not on Discord).");
             }
 
             Draft d = s.draft;
-            if (d.findEligible(p.id).isPresent()) throw new UserError(p.display + " is already in the pool.");
+            if (d.findEligible(p.id).isPresent()) throw new UserError(p.display + " is already a participant.");
             if (d.isDrafted(p.id)) throw new UserError(p.display + " has already been drafted.");
             d.eligible.add(p);
             d.sortEligible();
@@ -481,7 +481,7 @@ public class DraftManager {
             }
             commit(f, s, g);
             fetchStreaks(f, List.of(p));
-            return "➕ " + p.display + " added to the pool" + (p.onDiscord() ? "." : " (not on Discord).");
+            return "➕ " + p.display + " added to the participants" + (p.onDiscord() ? "." : " (not on Discord).");
         });
     }
 
@@ -493,10 +493,10 @@ public class DraftManager {
             List<String> done = new ArrayList<>();
 
             if (preDraft(s)) {
-                if (s.pool == null) throw new UserError("Choose captains first — that builds the pool.");
+                if (s.pool == null) throw new UserError("Choose captains first — that builds the participant list.");
                 for (String q : queries) {
                     Player p = tryResolve(s.pool, q)
-                            .orElseThrow(() -> new UserError("Nobody in the prepared pool matches `" + q + "`."));
+                            .orElseThrow(() -> new UserError("No participant matches `" + q + "`."));
                     s.pool.removeIf(x -> x.id == p.id);
                     s.excludedIds.add(p.id);
                     if (p.tornId != null) s.excludedTornIds.add(p.tornId);
@@ -514,12 +514,12 @@ public class DraftManager {
                     Player p = inPool.get();
                     d.eligible.removeIf(x -> x.id == p.id);
                     d.removeFromAllQueues(p.id);
-                    done.add(p.display + " (from the pool)");
+                    done.add(p.display + " (from the participants)");
                     continue;
                 }
                 List<Player> drafted = d.picks.stream().filter(pk -> !pk.dropped).map(pk -> pk.player).toList();
                 Player p = tryResolve(drafted, q)
-                        .orElseThrow(() -> new UserError("No player in the pool or on a team matches `" + q + "`."));
+                        .orElseThrow(() -> new UserError("No participant or team member matches `" + q + "`."));
                 Pick pick = d.picks.stream().filter(pk -> !pk.dropped && pk.player.id == p.id).findFirst().orElseThrow();
                 pick.dropped = true;
                 teams.removeMember(g, s.teams.get(pick.captainId), p.id);
@@ -568,7 +568,7 @@ public class DraftManager {
                 members = torn.fetchFactionMembers(f.getTornFactionId());
             } catch (UserError e) {
                 note = "\n⚠️ Couldn't load the Torn faction member list (" + e.getMessage()
-                        + ") — the pool only has Discord members with the draft role.";
+                        + ") — the list only has Discord members with the draft role.";
             }
             Map<Long, Member> discordByTorn = new HashMap<>();
             for (Member m : g.getMembers()) {
@@ -815,8 +815,8 @@ public class DraftManager {
             // Before the draft this shows the prepared pool so leadership can review it.
             boolean prepared = !s.draftRunning() && s.pool != null;
             List<Player> players = prepared ? s.pool : requireRunning(s, f).eligible;
-            if (players.isEmpty()) throw new UserError("Nobody is in the pool.");
-            String label = prepared ? " prepared pool — " + players.size() + " players" : " pool — " + players.size() + " left";
+            if (players.isEmpty()) throw new UserError("There are no participants.");
+            String label = prepared ? " participants — " + players.size() : " participants — " + players.size() + " left";
             List<MessageEmbed> embeds = new ArrayList<>();
             int perPage = 60;
             int pages = (players.size() + perPage - 1) / perPage;
