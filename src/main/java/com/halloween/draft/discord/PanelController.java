@@ -270,6 +270,10 @@ public class PanelController {
         return viewerHome(g, f, notice);
     }
 
+    /**
+     * Leader control panel. Buttons are grouped by job (setup / pool / go), grey by default, with
+     * the single recommended next step coloured so it's obvious what to do.
+     */
     private View leaderHome(Guild g, Member m, Faction f, String notice) {
         PanelInfo p = drafts.panelInfo(g, f);
         boolean isCaptain = p.captains().stream().anyMatch(c -> c.id() == m.getIdLong());
@@ -277,79 +281,99 @@ public class PanelController {
         List<LayoutComponent> rows = new ArrayList<>();
 
         if (!p.running()) {
+            boolean needCaptains = p.captains().size() < 2;
+            boolean needNames = !needCaptains && !p.allTeamsNamed();
+            boolean ready = !needCaptains && !needNames;
+
             rows.add(ActionRow.of(
-                    Button.primary(id("setcap", f), "👑 Set Captains"),
-                    Button.primary(id("name", f), "🏷️ Name Team").withDisabled(p.captains().isEmpty()),
+                    style(needCaptains, id("setcap", f), "👑 Captains"),
+                    style(needNames, id("name", f), "🏷️ Team Names").withDisabled(p.captains().isEmpty()),
                     Button.secondary(id("repl", f), "🔁 Replace Captain").withDisabled(p.captains().isEmpty())));
             rows.add(ActionRow.of(
-                    Button.secondary(id("pool", f, "0"), "📋 View Pool").withDisabled(!p.poolPrepared()),
-                    Button.secondary(id("add", f), "➕ Add Player"),
-                    Button.secondary(id("rm", f), "➖ Remove Players").withDisabled(!p.poolPrepared()),
-                    Button.secondary(id("rebuild", f), "🔄 Rebuild Pool")));
-            boolean ready = p.captains().size() >= 2 && p.allTeamsNamed();
-            rows.add(ActionRow.of(Button.success(id("start", f), "▶️ Start Draft").withDisabled(!ready)));
+                    Button.secondary(id("pool", f, "0"), "📋 Pool").withDisabled(!p.poolPrepared()),
+                    Button.secondary(id("add", f), "➕ Add"),
+                    Button.secondary(id("rm", f), "➖ Remove").withDisabled(!p.poolPrepared()),
+                    Button.secondary(id("rebuild", f), "🔄 Rebuild")));
+            List<Button> go = new ArrayList<>();
+            go.add(ready ? Button.success(id("start", f), "▶️ Start Draft")
+                    : Button.secondary(id("start", f), "▶️ Start Draft").asDisabled());
+            if (isCaptain) go.add(Button.secondary(id("my", f), "🎯 My Team"));
+            rows.add(ActionRow.of(go));
         } else {
             boolean paused = p.status() == DraftStatus.PAUSED;
             rows.add(ActionRow.of(
-                    paused ? Button.success(id("resume", f), "▶️ Resume") : Button.secondary(id("pause", f), "⏸️ Pause"),
+                    paused ? Button.success(id("resume", f), "▶️ Resume") : Button.primary(id("pause", f), "⏸️ Pause"),
                     Button.secondary(id("undo", f), "↩️ Undo").withDisabled(p.picksMade() == 0),
-                    Button.primary(id("apick", f), "🛡️ Admin Pick"),
-                    Button.danger(id("end", f), "🛑 End Draft")));
+                    Button.secondary(id("apick", f), "🛡️ Admin Pick")));
             rows.add(ActionRow.of(
-                    Button.secondary(id("pool", f, "0"), "📋 View Pool"),
-                    Button.secondary(id("add", f), "➕ Add Player"),
-                    Button.secondary(id("rm", f), "➖ Remove Players"),
-                    Button.secondary(id("repl", f), "🔁 Replace Captain"),
-                    Button.secondary(id("name", f), "🏷️ Rename Team")));
+                    Button.secondary(id("pool", f, "0"), "📋 Pool"),
+                    Button.secondary(id("add", f), "➕ Add"),
+                    Button.secondary(id("rm", f), "➖ Remove")));
+            List<Button> team = new ArrayList<>();
+            team.add(Button.secondary(id("repl", f), "🔁 Replace Captain"));
+            team.add(Button.secondary(id("name", f), "🏷️ Team Names"));
+            if (isCaptain) team.add(Button.secondary(id("my", f), "🎯 My Team"));
+            rows.add(ActionRow.of(team));
         }
+
+        // Last row: anything destructive, kept away from the everyday buttons, then Close.
         List<Button> last = new ArrayList<>();
-        if (isCaptain) last.add(Button.primary(id("my", f), "🎯 My Team & Queue"));
-        if (admin && !p.running()) last.add(Button.danger(id("td", f), "🧹 Teardown"));
+        if (p.running()) last.add(Button.danger(id("end", f), "🛑 End Draft"));
+        else if (admin) last.add(Button.danger(id("td", f), "🧹 Teardown"));
         last.add(Button.secondary(id("close", f), "✖ Close"));
         rows.add(ActionRow.of(last));
 
-        return View.of(statusEmbed(p, "🎛️ " + f.getName() + " — Draft Control", notice), rows);
+        return View.of(statusEmbed(p, "🎛️ " + f.getName() + " · Draft Control", notice, nextStep(p)), rows);
     }
 
     private View viewerHome(Guild g, Faction f, String notice) {
         PanelInfo p = drafts.panelInfo(g, f);
-        return View.of(statusEmbed(p, "🏆 " + f.getName() + " — Draft", notice), List.of(ActionRow.of(
-                Button.secondary(id("pool", f, "0"), "📋 View Pool").withDisabled(!p.poolPrepared()),
+        return View.of(statusEmbed(p, "🏆 " + f.getName() + " · Draft", notice, null), List.of(ActionRow.of(
+                Button.secondary(id("pool", f, "0"), "📋 Pool").withDisabled(!p.poolPrepared()),
                 Button.secondary(id("close", f), "✖ Close"))));
+    }
+
+    /** The one thing a leader should do next, shown under the status. */
+    private static String nextStep(PanelInfo p) {
+        if (p.running()) return null;
+        if (p.captains().size() < 2) return "Choose at least 2 captains with **👑 Captains** — that also builds the pool.";
+        if (!p.allTeamsNamed()) return "Every team needs a name — use **🏷️ Team Names** (or let captains name their own).";
+        return "All set — check the pool, then **▶️ Start Draft**.";
+    }
+
+    /** Coloured (primary) when it's the recommended next step, grey otherwise. */
+    private static Button style(boolean highlight, String id, String label) {
+        return highlight ? Button.primary(id, label) : Button.secondary(id, label);
     }
 
     View captainHome(Guild g, Member m, Faction f, String notice) {
         CaptainView c = drafts.captainView(f, m.getIdLong());
-        StringBuilder sb = new StringBuilder();
-        if (notice != null) sb.append(notice).append("\n\n");
-        sb.append("**Team:** ").append(c.team() == null ? "⚠️ not named yet — use **Name Team**" : c.team()).append('\n');
-        if (c.running()) {
-            sb.append(c.onClock() ? "🎯 **You're on the clock** — use `/pick`\n" : "Waiting for your turn — use `/pick` when it comes.\n");
-            sb.append("\n**Your picks (").append(c.picks().size()).append("):**\n");
-            sb.append(c.picks().isEmpty() ? "*none yet*\n" : bullets(c.picks(), 20));
-            sb.append("\n**Your queue (").append(c.queue().size()).append("/5):**\n");
-            sb.append(c.queue().isEmpty() ? "*empty — queued players are picked for you automatically when your turn starts*\n"
-                    : numbered(c.queue()));
-        } else {
-            sb.append("\nThe draft hasn't started yet. Once it does, your picks and queue show here.");
-        }
-        MessageEmbed embed = embed("🎯 " + f.getName() + " — Your Team", sb.toString());
+        EmbedBuilder eb = new EmbedBuilder().setTitle("🎯 " + f.getName() + " · " + (c.team() == null ? "Your Team" : c.team()))
+                .setColor(BLURPLE);
+        StringBuilder desc = new StringBuilder();
+        if (notice != null) desc.append(notice).append("\n\n");
+        if (c.team() == null) desc.append("⚠️ **Your team needs a name** — use **🏷️ Name Team**.\n");
+        if (!c.running()) desc.append("The draft hasn't started yet. Your picks and queue will show here once it does.");
+        else desc.append(c.onClock() ? "🎯 **You're on the clock!** Use `/pick`." : "⏳ Waiting for your turn — use `/pick` when it comes.");
+        eb.setDescription(desc.toString());
 
         List<LayoutComponent> rows = new ArrayList<>();
         if (c.running()) {
+            eb.addField("Picks (" + c.picks().size() + ")", c.picks().isEmpty() ? "*none yet*" : bullets(c.picks(), 20), true);
+            eb.addField("Queue (" + c.queue().size() + "/5)", c.queue().isEmpty()
+                    ? "*empty*\nQueued players are picked for you automatically when your turn starts." : numbered(c.queue()), true);
             rows.add(ActionRow.of(
-                    Button.primary(id("qadd", f), "➕ Add to Queue").withDisabled(c.queue().size() >= 5),
-                    Button.secondary(id("qrm", f), "➖ Remove from Queue").withDisabled(c.queue().isEmpty()),
-                    Button.danger(id("qclr", f), "🗑️ Clear Queue").withDisabled(c.queue().isEmpty())));
+                    Button.primary(id("qadd", f), "➕ Queue Player").withDisabled(c.queue().size() >= 5),
+                    Button.secondary(id("qrm", f), "➖ Unqueue").withDisabled(c.queue().isEmpty()),
+                    Button.secondary(id("qclr", f), "🗑️ Clear").withDisabled(c.queue().isEmpty())));
         }
-        List<Button> last = new ArrayList<>();
-        last.add(Button.secondary(id("name", f), c.team() == null ? "🏷️ Name Team" : "🏷️ Rename Team"));
-        last.add(Button.secondary(id("pool", f, "0"), "📋 View Pool"));
-        if (drafts.isLeader(m, f)) last.add(Button.secondary(id("home", f), "🎛️ Control Panel"));
-        else last.add(Button.secondary(id("my", f), "🔄 Refresh"));
-        last.add(Button.secondary(id("close", f), "✖ Close"));
-        rows.add(ActionRow.of(last));
-        return View.of(embed, rows);
+        rows.add(ActionRow.of(
+                style(c.team() == null, id("name", f), c.team() == null ? "🏷️ Name Team" : "🏷️ Rename Team"),
+                Button.secondary(id("pool", f, "0"), "📋 Pool"),
+                drafts.isLeader(m, f) ? Button.secondary(id("home", f), "🎛️ Control Panel")
+                        : Button.secondary(id("my", f), "🔄 Refresh")));
+        rows.add(ActionRow.of(Button.secondary(id("close", f), "✖ Close")));
+        return View.of(eb.build(), rows);
     }
 
     private View setCaptainsView(Faction f) {
@@ -496,48 +520,48 @@ public class PanelController {
     // Embeds
     // =====================================================================
 
-    private MessageEmbed statusEmbed(PanelInfo p, String title, String notice) {
-        StringBuilder sb = new StringBuilder();
-        if (notice != null) sb.append(notice).append("\n\n");
+    private MessageEmbed statusEmbed(PanelInfo p, String title, String notice, String next) {
+        EmbedBuilder eb = new EmbedBuilder().setTitle(title).setColor(BLURPLE);
 
+        StringBuilder desc = new StringBuilder();
+        if (notice != null) desc.append(notice).append("\n\n");
         if (p.running()) {
             if (p.status() == DraftStatus.PAUSED) {
-                sb.append("⏸️ **Paused** — <@").append(p.onClock()).append("> is up next\n");
+                desc.append("⏸️ **Paused** — <@").append(p.onClock()).append("> is up next");
             } else {
-                sb.append("🎯 **On the clock:** <@").append(p.onClock()).append(">");
-                if (p.deadlineMs() != null) sb.append(" · ⏱ <t:").append(p.deadlineMs() / 1000).append(":R>");
-                sb.append('\n');
+                desc.append("🎯 **On the clock:** <@").append(p.onClock()).append(">");
+                if (p.deadlineMs() != null) desc.append(" · ⏱ <t:").append(p.deadlineMs() / 1000).append(":R>");
             }
-            sb.append(p.picksMade()).append(" picks made · ").append(p.poolSize()).append(" left · ")
-                    .append(p.timerSeconds() > 0 ? p.timerSeconds() / 60 + " min timer" : "no timer")
-                    .append(" · auto-pick ").append(p.autopick() ? "on" : "off").append('\n');
         } else if (p.status() == DraftStatus.COMPLETE) {
-            sb.append("✅ The last draft is complete. Set captains to prepare the next one.\n");
+            desc.append("✅ **Last draft complete.** Choose captains to prepare the next one.");
         } else if (p.status() == DraftStatus.ENDED) {
-            sb.append("🛑 The last draft was ended early. Set captains to prepare the next one.\n");
+            desc.append("🛑 **Last draft ended early.** Choose captains to prepare the next one.");
         } else {
-            sb.append("**Not started.** ");
-            if (p.captains().size() < 2) sb.append("Set at least 2 captains to begin.\n");
-            else if (!p.allTeamsNamed()) sb.append("Every captain needs a team name before the draft can start.\n");
-            else sb.append("Ready to start!\n");
+            desc.append("⚪ **Not started**");
         }
+        if (next != null) desc.append("\n**Next:** ").append(next);
+        eb.setDescription(desc.toString());
 
-        sb.append("\n**Captains**\n");
-        if (p.captains().isEmpty()) sb.append("*none set*\n");
+        StringBuilder caps = new StringBuilder();
         for (int i = 0; i < p.captains().size(); i++) {
             CaptainInfo c = p.captains().get(i);
-            sb.append(i + 1).append(". <@").append(c.id()).append("> — ")
-                    .append(c.team() == null ? "⚠️ *no team yet*" : "**" + c.team() + "**");
-            if (p.running()) sb.append(" · ").append(c.picks()).append(" picked");
-            sb.append('\n');
+            caps.append('`').append(i + 1).append("` <@").append(c.id()).append("> — ")
+                    .append(c.team() == null ? "⚠️ *no team name*" : "**" + c.team() + "**");
+            if (p.running()) caps.append(" · ").append(c.picks());
+            caps.append('\n');
         }
+        eb.addField("👑 Captains" + (p.running() ? " · picks" : ""), caps.length() == 0 ? "*none yet*" : caps.toString(), false);
 
-        if (!p.running()) {
-            sb.append("\n**Pool:** ").append(p.poolPrepared()
-                    ? p.poolSize() + " players (" + p.poolOffDiscord() + " not on Discord)"
-                    : "not built yet — it's built when captains are set");
+        eb.addField("📋 Pool", p.poolPrepared()
+                ? "**" + p.poolSize() + "** " + (p.running() ? "left" : "players") + "\n" + p.poolOffDiscord() + " not on Discord"
+                : "*built when captains are set*", true);
+        if (p.running()) {
+            eb.addField("⚙️ Settings", (p.timerSeconds() > 0 ? p.timerSeconds() / 60 + " min timer" : "No timer")
+                    + "\nAuto-pick " + (p.autopick() ? "on" : "off"), true);
+            eb.addField("📈 Progress", "**" + p.picksMade() + "** picks made", true);
         }
-        return new EmbedBuilder().setTitle(title).setDescription(sb.toString()).setColor(BLURPLE).build();
+        eb.setFooter("Only you can see this panel · it closes after " + PANEL_MINUTES + " minutes");
+        return eb.build();
     }
 
     private static MessageEmbed embed(String title, String body) {

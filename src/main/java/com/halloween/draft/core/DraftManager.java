@@ -208,7 +208,7 @@ public class DraftManager {
         Faction f = resolveLeaderFaction(invoker, opt, channelId);
         return withLock(f.getKey(), () -> {
             FactionState s = state(f);
-            if (s.draftRunning()) throw new UserError("A draft is running — use `/replacecaptain` to swap someone.");
+            if (s.draftRunning()) throw new UserError("A draft is running — use 🔁 Replace Captain to swap someone.");
 
             Map<Long, Member> byId = new LinkedHashMap<>();
             chosen.forEach(m -> byId.putIfAbsent(m.getIdLong(), m));
@@ -231,16 +231,8 @@ public class DraftManager {
             save(s);
             fetchStreaks(f, pool.players().stream().filter(p -> p.streak == null).toList());
 
-            StringBuilder sb = new StringBuilder("**" + f.getName() + " captains** (pick order):\n");
-            for (int i = 0; i < unique.size(); i++) {
-                sb.append(i + 1).append(". ").append(unique.get(i).getAsMention()).append('\n');
-            }
-            sb.append("\n📋 **Pool ready:** ").append(pool.players().size()).append(" players — ")
-                    .append(pool.discord()).append(" on Discord, ").append(pool.tornOnly()).append(" not on Discord.")
-                    .append(pool.note())
-                    .append("\nReview it with `/remainingdraftees` and trim it with `/removeplayer`.")
-                    .append("\nEach captain must name their team with `/nameteam` before the draft can start.");
-            return sb.toString();
+            return "✅ **" + unique.size() + " captains set** and the pool is built ("
+                    + pool.players().size() + " players)." + pool.note();
         });
     }
 
@@ -252,7 +244,7 @@ public class DraftManager {
         }
         return withLock(f.getKey(), () -> {
             FactionState s = state(f);
-            if (s.draftRunning()) throw new UserError("A " + f.getName() + " draft is already running. End it with `/enddraft` first.");
+            if (s.draftRunning()) throw new UserError("A " + f.getName() + " draft is already running. End it first.");
 
             TextChannel channel = g.getTextChannelById(f.getChannelId());
             if (channel == null) throw new UserError("I can't find the " + f.getName() + " draft channel.");
@@ -261,12 +253,12 @@ public class DraftManager {
 
             // Captains must be set with /setcaptains, and every one of them must have named their team.
             if (s.captains.size() < 2) {
-                throw new UserError("Set at least 2 captains with `/setcaptains` before starting the draft.");
+                throw new UserError("Choose at least 2 captains before starting the draft.");
             }
             List<Member> captains = new ArrayList<>();
             for (Long id : s.captains) {
                 Member m = g.getMemberById(id);
-                if (m == null) throw new UserError("Captain <@" + id + "> isn't in the server any more — run `/setcaptains` again.");
+                if (m == null) throw new UserError("Captain <@" + id + "> isn't in the server any more — choose captains again.");
                 captains.add(m);
             }
             if (captains.size() > MAX_CAPTAINS) throw new UserError("Maximum is " + MAX_CAPTAINS + " captains.");
@@ -274,7 +266,7 @@ public class DraftManager {
                     .filter(m -> { Team t = s.teams.get(m.getIdLong()); return t == null || t.roleId == null; })
                     .map(Member::getAsMention).toList();
             if (!unnamed.isEmpty()) {
-                throw new UserError("These captains still need to name their team with `/nameteam`: "
+                throw new UserError("These captains still need a team name: "
                         + String.join(", ", unnamed) + ".");
             }
 
@@ -445,11 +437,8 @@ public class DraftManager {
             save(s);
             fetchStreaks(f, r.players());
             int excluded = s.excludedIds.size();
-            return "📋 **" + f.getName() + " pool ready:** " + r.players().size() + " players — "
-                    + r.discord() + " on Discord, " + r.tornOnly() + " not on Discord"
-                    + (excluded > 0 ? " (" + excluded + " removed earlier are still left out)" : "") + "."
-                    + r.note()
-                    + "\nReview it with `/remainingdraftees`, trim it with `/removeplayer`, then `/startdraft`.";
+            return "🔄 **Pool rebuilt:** " + r.players().size() + " players"
+                    + (excluded > 0 ? " (" + excluded + " removed earlier are still left out)" : "") + "." + r.note();
         });
     }
 
@@ -504,7 +493,7 @@ public class DraftManager {
             List<String> done = new ArrayList<>();
 
             if (preDraft(s)) {
-                if (s.pool == null) throw new UserError("Build the pool first with `/buildpool`.");
+                if (s.pool == null) throw new UserError("Choose captains first — that builds the pool.");
                 for (String q : queries) {
                     Player p = tryResolve(s.pool, q)
                             .orElseThrow(() -> new UserError("Nobody in the prepared pool matches `" + q + "`."));
@@ -514,8 +503,7 @@ public class DraftManager {
                     done.add(p.display);
                 }
                 save(s);
-                return "➖ Removed from the " + f.getName() + " pool: " + String.join(", ", done)
-                        + ".\nThey stay out even if you rebuild the pool (`/addplayer` brings someone back).";
+                return "➖ **Removed:** " + String.join(", ", done) + ". They stay out on a rebuild (➕ Add brings someone back).";
             }
 
             Draft d = s.draft;
@@ -771,7 +759,7 @@ public class DraftManager {
             return resolveCaptainFaction(captain.getIdLong(), channelId, false);
         } catch (UserError e) {
             throw new UserError(onBehalf
-                    ? captain.getEffectiveName() + " isn't a captain — add them with `/setcaptains` first."
+                    ? captain.getEffectiveName() + " isn't a captain."
                     : e.getMessage());
         }
     }
@@ -794,7 +782,7 @@ public class DraftManager {
         return withLock(f.getKey(), () -> {
             FactionState s = state(f);
             List<Long> caps = s.activeCaptains();
-            if (caps.isEmpty()) throw new UserError("No " + f.getName() + " captains set yet — leadership can add them with `/setcaptains`.");
+            if (caps.isEmpty()) throw new UserError("No " + f.getName() + " captains set yet.");
             StringBuilder sb = new StringBuilder();
             int unnamed = 0;
             for (int i = 0; i < caps.size(); i++) {
@@ -956,7 +944,7 @@ public class DraftManager {
         if (!invoker.hasPermission(Permission.ADMINISTRATOR)) throw new UserError("Server admins only.");
         List<String> running = props.getFactions().stream().filter(f -> state(f).draftRunning()).map(Faction::getName).toList();
         if (!running.isEmpty()) {
-            throw new UserError("These drafts are still running: " + String.join(", ", running) + ". End them with `/enddraft` first.");
+            throw new UserError("These drafts are still running: " + String.join(", ", running) + ". End them first.");
         }
         int count = props.getFactions().stream().mapToInt(f -> state(f).teams.size()).sum();
         return count + " team" + (count == 1 ? "" : "s") + " across all factions";
