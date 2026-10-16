@@ -146,30 +146,37 @@ public class TeamService {
         }
     }
 
-    /** Moves a role to sit directly below the bot's highest role. Failure is logged, not fatal. */
+    /**
+     * Moves a role to sit directly below the bot's own integration role ("Halloween Draft Bot"),
+     * or its highest role if it has no integration role. Failure is logged, not fatal.
+     */
     private void moveBelowBot(Guild guild, Role role) {
         try {
             List<Role> botRoles = guild.getSelfMember().getRoles(); // highest first
             if (botRoles.isEmpty()) return;
-            Role botTop = botRoles.get(0);
+            Role anchor = botRoles.stream().filter(Role::isManaged).findFirst().orElse(botRoles.get(0));
+
             var order = guild.modifyRolePositions();
             List<Role> current = order.getCurrentOrder();
-            int botIdx = current.indexOf(botTop);
+            int anchorIdx = current.indexOf(anchor);
             int roleIdx = current.indexOf(role);
-            boolean ascending = order.isAscendingOrder(); // true: index 0 is the bottom of the list
-            log.info("Moving role {} (index {}) under bot role {} (index {}), ascending={}",
-                    role.getName(), roleIdx, botTop.getName(), botIdx, ascending);
-            if (botIdx < 0 || roleIdx < 0) return;
+            if (anchorIdx < 0 || roleIdx < 0 || current.size() < 2) return;
 
-            // moveTo removes the role and re-inserts it at the target index.
+            // Work out the list direction from real positions rather than trusting a flag:
+            // "topFirst" means a lower index is higher up the role list.
+            boolean topFirst = current.get(0).getPosition() > current.get(current.size() - 1).getPosition();
+
+            // moveTo removes the role then re-inserts it at the target index.
             int target;
-            if (ascending) {
-                // below = one index lower; removing a lower role first shifts the bot role down one
-                target = roleIdx < botIdx ? botIdx - 1 : botIdx;
+            if (topFirst) {
+                // directly below = the next index; removing a role after the anchor doesn't shift it
+                target = roleIdx > anchorIdx ? anchorIdx + 1 : anchorIdx;
             } else {
-                // below = one index higher; removing a later role doesn't shift the bot role
-                target = roleIdx > botIdx ? botIdx + 1 : botIdx;
+                // directly below = the previous index; removing a role before the anchor shifts it down one
+                target = roleIdx < anchorIdx ? anchorIdx - 1 : anchorIdx;
             }
+            log.info("Moving role {} (index {}) under {} (index {}), topFirst={}, target {}",
+                    role.getName(), roleIdx, anchor.getName(), anchorIdx, topFirst, target);
             if (target == roleIdx) return;
             order.selectPosition(role).moveTo(target).complete();
         } catch (Exception e) {
