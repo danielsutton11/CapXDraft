@@ -226,7 +226,7 @@ public class PanelController {
             case "td" -> {
                 String summary = drafts.checkTeardown(m);
                 yield new Ui(RED)
-                        .text("## 🧹 Teardown — all factions")
+                        .text("## 🧹 Clean Up — all factions")
                         .text("This deletes **" + summary + "**: their roles, captain roles, text and voice channels, "
                                 + "the prepared participant lists, removals and competition times.\n"
                                 + "Finished boards and scoreboards stay posted.")
@@ -422,7 +422,7 @@ public class PanelController {
         }
 
         ui.divider();
-        ui.buttons(admin ? Button.secondary(id("td", f), "🧹 Teardown") : null,
+        ui.buttons(admin ? Button.danger(id("td", f), "🧹 Clean Up") : null,
                 Button.secondary(id("close", f), "✖ Close"));
         ui.text("-# Only you can see this panel · it closes after " + PANEL_MINUTES + " minutes");
         return ui.build();

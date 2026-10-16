@@ -1086,7 +1086,7 @@ public class DraftManager {
                 .map(Faction::getName).toList();
         if (!live.isEmpty()) {
             throw new UserError("Competitions are live for: " + String.join(", ", live)
-                    + ". Teardown removes the teams they're scored on, so wait until they finish.");
+                    + ". Clean Up removes the teams they're scored on, so wait until they finish.");
         }
         List<String> running = props.getFactions().stream().filter(f -> state(f).draftRunning()).map(Faction::getName).toList();
         if (!running.isEmpty()) {

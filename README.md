@@ -23,7 +23,7 @@ Before the draft:
 - **👥 Participants:** View, Add (Discord member or Torn ID), Remove, Rebuild List.
 - **👑 Captains:** the list, Replace Captain, My Team (if you're a captain too).
 - **🏁 Competition:** live status.
-- Teardown (admins only) and Close.
+- Clean Up (admins only) and Close.
 
 During the draft: Pause/Resume, Undo, Admin Pick at the top, then Participants, Teams (Replace
 Captain, Team Names), Competition (times and keys), and End Draft.
@@ -78,7 +78,7 @@ on Discord); defender not in one of the other family factions; attack ended insi
 Stealthed attacks count. The scoreboard ranks teams and lists each team's top 10 hitters, and is
 marked **🏁 Final** two minutes after the end once the last hits are in.
 
-If every key fails, the leaders who added them get a DM. Teardown is blocked while a competition is live.
+If every key fails, the leaders who added them get a DM. Clean Up is blocked while a competition is live.
 
 ## Railway setup
 
