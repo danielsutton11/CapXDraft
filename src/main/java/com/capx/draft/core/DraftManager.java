@@ -234,8 +234,8 @@ public class DraftManager {
     public String startDraft(Guild g, Member invoker, String opt, long channelId,
                              int timerSeconds, boolean autopick, boolean randomOrder) {
         Faction f = resolveLeaderFaction(invoker, opt, channelId);
-        if (timerSeconds != 0 && (timerSeconds < 30 || timerSeconds > 3600)) {
-            throw new UserError("Timer must be 0 (off) or between 30 and 3600 seconds.");
+        if (timerSeconds != 0 && (timerSeconds < 60 || timerSeconds > 3600)) {
+            throw new UserError("Timer must be 0 (off) or between 1 and 60 minutes.");
         }
         return withLock(f.getKey(), () -> {
             FactionState s = state(f);

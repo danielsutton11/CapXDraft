@@ -45,6 +45,13 @@ public class BoardRenderer {
         return embeds;
     }
 
+    /** 120 → "2 min", 90 → "1 min 30s", 45 → "45s". */
+    static String duration(int seconds) {
+        int m = seconds / 60, s = seconds % 60;
+        if (m == 0) return s + "s";
+        return s == 0 ? m + " min" : m + " min " + s + "s";
+    }
+
     public MessageEmbed header(BotProperties.Faction faction, FactionState state) {
         Draft d = state.draft;
         StringBuilder sb = new StringBuilder();
@@ -64,7 +71,7 @@ public class BoardRenderer {
                 sb.append('\n');
             }
             case PAUSED -> sb.append("⏸️ **Paused** — <@").append(current).append("> is up next")
-                    .append(d.pausedRemainingMs != null ? " (" + d.pausedRemainingMs / 1000 + "s left on their clock)" : "")
+                    .append(d.pausedRemainingMs != null ? " (" + duration((int) (d.pausedRemainingMs / 1000)) + " left on their clock)" : "")
                     .append('\n');
             case COMPLETE -> sb.append("✅ **Draft complete** — final teams below\n");
             case ENDED -> sb.append("🛑 **Draft ended early** — teams below\n");
@@ -86,7 +93,7 @@ public class BoardRenderer {
         }
 
         String footer = d.eligible.size() + " left in pool · "
-                + (d.timerSeconds > 0 ? "Timer " + d.timerSeconds + "s" : "No timer")
+                + (d.timerSeconds > 0 ? "Timer " + duration(d.timerSeconds) : "No timer")
                 + " · Auto-pick " + (d.autopick ? "on" : "off");
 
         return new EmbedBuilder()

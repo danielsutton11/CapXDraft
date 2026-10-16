@@ -116,7 +116,7 @@ public class DraftListener extends ListenerAdapter {
                 yield drafts.setCaptains(g, m, faction, ch, caps, bool(e, "random", false));
             }
             case "startdraft" -> drafts.startDraft(g, m, faction, ch,
-                    e.getOption("timer") == null ? 0 : e.getOption("timer").getAsInt(),
+                    e.getOption("timer") == null ? 0 : e.getOption("timer").getAsInt() * 60, // minutes → seconds
                     bool(e, "autopick", false), bool(e, "random_order", false));
             case "pause" -> drafts.pause(g, m, faction, ch);
             case "resume" -> drafts.resume(g, m, faction, ch);

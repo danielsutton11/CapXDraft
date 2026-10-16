@@ -29,8 +29,8 @@ public final class Commands {
         list.add(setCaptains);
 
         list.add(slash("startdraft", "Start a faction draft (leadership)")
-                .addOptions(new OptionData(OptionType.INTEGER, "timer", "Seconds per pick: 0 = no timer, otherwise 30–3600")
-                        .setRequiredRange(0, 3600))
+                .addOptions(new OptionData(OptionType.INTEGER, "timer", "Minutes per pick: 0 = no timer, otherwise 1–60")
+                        .setRequiredRange(0, 60))
                 .addOption(OptionType.BOOLEAN, "autopick", "Auto-pick (queue first, then random) when time runs out")
                 .addOption(OptionType.BOOLEAN, "random_order", "Shuffle the captain order")
                 .addOptions(faction(props)));
