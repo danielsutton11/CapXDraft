@@ -588,8 +588,9 @@ public class DraftManager {
                     log.error("Team creation failed for {}", name, e);
                     teams.delete(g, team);
                     s.teams.remove(me);
-                    throw new UserError("I couldn't create the team role/channels — check I have Manage Roles and "
-                            + "Manage Channels, and that my role is above the team roles.");
+                    if (e instanceof UserError ue) throw ue;
+                    throw new UserError("I couldn't create the team role/channels (" + e.getMessage() + "). "
+                            + "Check my role has Manage Roles and Manage Channels and sits above the team roles.");
                 }
                 reply = "Team **" + name + "** created with its own role, <#" + team.textChannelId + "> and a voice channel.";
                 announce(g, f, "🏷️ " + captain.getAsMention() + " named their team **" + name + "**.");

@@ -17,6 +17,7 @@ import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.stream.Collectors;
 
 /** Creates, renames and deletes the Discord role + text/voice channels behind a named team. */
 @Service
@@ -44,7 +45,27 @@ public class TeamService {
                        Collection<Long> memberIds) {
         Category category = guild.getCategoryById(props.getTeamCategoryId());
         if (category == null) {
-            throw new IllegalStateException("Team category " + props.getTeamCategoryId() + " not found");
+            throw new UserError("I can't find the team category (" + props.getTeamCategoryId() + ").");
+        }
+
+        // Discord only lets the bot grant permissions it holds itself in this category,
+        // so work out what it has there and never ask for more.
+        EnumSet<Permission> has = EnumSet.copyOf(guild.getSelfMember().getPermissions(category));
+        EnumSet<Permission> required = EnumSet.of(
+                Permission.VIEW_CHANNEL, Permission.MANAGE_CHANNEL, Permission.MANAGE_PERMISSIONS);
+        required.removeAll(has);
+        if (!required.isEmpty()) {
+            throw new UserError("In the team category I'm missing: " + names(required)
+                    + ". Give my role those there (Edit Category → Permissions) and try again.");
+        }
+        EnumSet<Permission> textAllow = only(TEXT_ALLOW, has);
+        EnumSet<Permission> voiceAllow = only(VOICE_ALLOW, has);
+        EnumSet<Permission> botAllow = only(BOT_ALLOW, has);
+        EnumSet<Permission> skipped = EnumSet.copyOf(TEXT_ALLOW);
+        skipped.addAll(VOICE_ALLOW);
+        skipped.removeAll(has);
+        if (!skipped.isEmpty()) {
+            log.warn("Team channels won't grant {} - the bot doesn't have them in the team category", names(skipped));
         }
 
         Role role = guild.createRole()
@@ -60,17 +81,17 @@ public class TeamService {
 
         TextChannel text = category.createTextChannel(textName(faction, team.name))
                 .addRolePermissionOverride(everyone, NONE, HIDE)
-                .addRolePermissionOverride(role.getIdLong(), TEXT_ALLOW, NONE)
-                .addRolePermissionOverride(leaders, TEXT_ALLOW, NONE)
-                .addMemberPermissionOverride(self, BOT_ALLOW, NONE)
+                .addRolePermissionOverride(role.getIdLong(), textAllow, NONE)
+                .addRolePermissionOverride(leaders, textAllow, NONE)
+                .addMemberPermissionOverride(self, botAllow, NONE)
                 .complete();
         team.textChannelId = text.getIdLong();
 
         VoiceChannel voice = category.createVoiceChannel(voiceName(faction, team.name))
                 .addRolePermissionOverride(everyone, NONE, HIDE)
-                .addRolePermissionOverride(role.getIdLong(), VOICE_ALLOW, NONE)
-                .addRolePermissionOverride(leaders, VOICE_ALLOW, NONE)
-                .addMemberPermissionOverride(self, BOT_ALLOW, NONE)
+                .addRolePermissionOverride(role.getIdLong(), voiceAllow, NONE)
+                .addRolePermissionOverride(leaders, voiceAllow, NONE)
+                .addMemberPermissionOverride(self, botAllow, NONE)
                 .complete();
         team.voiceChannelId = voice.getIdLong();
 
@@ -135,6 +156,16 @@ public class TeamService {
         holders.forEach(m -> guild.removeRoleFromMember(UserSnowflake.fromId(m.getIdLong()), role)
                 .queue(null, e -> {}));
         return holders.size();
+    }
+
+    private static EnumSet<Permission> only(EnumSet<Permission> wanted, EnumSet<Permission> has) {
+        EnumSet<Permission> out = EnumSet.copyOf(wanted);
+        out.retainAll(has);
+        return out;
+    }
+
+    private static String names(Collection<Permission> perms) {
+        return perms.stream().map(Permission::getName).collect(Collectors.joining(", "));
     }
 
     static String textName(BotProperties.Faction faction, String teamName) {
