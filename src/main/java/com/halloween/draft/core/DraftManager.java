@@ -226,7 +226,19 @@ public class DraftManager {
                 if (!newIds.contains(old) && !isCaptainElsewhere(old, f.getKey())) teams.setCaptainRole(g, old, false);
             }
             newIds.forEach(id -> teams.setCaptainRole(g, id, true));
+            List<Long> previous = s.captains == null ? List.of() : s.captains;
             s.captains = new ArrayList<>(newIds);
+
+            // Tell new captains (and anyone still without a team name) what to do next.
+            // Re-saving the same, already-named captains sends nothing.
+            for (Long id : newIds) {
+                if (previous.contains(id) && teamNamed(s, id)) continue;
+                dm(id, "👑 You're a **" + f.getName() + "** draft captain!\n"
+                        + (teamNamed(s, id) ? "Your team is **" + s.teams.get(id).name + "**. "
+                        : "**Name your team:** run `/draft` in <#" + f.getChannelId()
+                        + "> and press 🏷️ **Name Team**.\n")
+                        + "You'll get a DM here when it's your turn to pick.");
+            }
 
             // Build (or rebuild) the pool straight away so leadership can review and trim it.
             PoolResult pool = buildPool(g, f, s);
@@ -424,8 +436,11 @@ public class DraftManager {
             if (!isCaptainElsewhere(oldId, f.getKey())) teams.setCaptainRole(g, oldId, false);
             teams.setCaptainRole(g, newId, true);
 
+            boolean named = team != null && team.roleId != null;
             dm(newId, "🔁 You're now a " + f.getName() + " captain"
-                    + (team != null ? " of **" + team.name + "**" : "") + ", replacing " + oldCap.getEffectiveName() + ".");
+                    + (named ? " of **" + team.name + "**" : "") + ", replacing " + oldCap.getEffectiveName() + "."
+                    + (named ? "" : "\n**Name your team:** run `/draft` in <#" + f.getChannelId()
+                    + "> and press 🏷️ **Name Team**."));
             dm(oldId, "🔁 You've been replaced as a " + f.getName() + " captain by " + newCap.getEffectiveName() + ".");
             if (running) {
                 if (wasOnClock && s.draft.status == DraftStatus.ACTIVE) startClock(f, s, g, null, true);
@@ -859,9 +874,14 @@ public class DraftManager {
                             Long deadlineMs, Long pausedRemainingMs, int timerSeconds, boolean autopick,
                             int picksMade, boolean allTeamsNamed, int excluded) {}
 
-    /** A captain's own view: their team, picks and queue. */
+    /**
+     * A captain's own view: their team, picks and queue, plus where they are in the order.
+     * {@code picksAway} is 0 when they're on the clock and null when they have no picks left;
+     * {@code nextPick} is that pick's overall number (1-based).
+     */
     public record CaptainView(Faction faction, String team, List<Player> picks, List<Player> queue,
-                              boolean running, boolean onClock) {}
+                              boolean running, boolean onClock, boolean paused, Long clockCaptain,
+                              Long deadlineMs, Long pausedRemainingMs, Integer picksAway, Integer nextPick) {}
 
     public Faction faction(String key) {
         return props.faction(key).orElseThrow(() -> new UserError("Unknown faction."));
@@ -899,13 +919,26 @@ public class DraftManager {
             FactionState s = state(f);
             Team t = s.teams.get(captainId);
             String team = t != null && t.roleId != null ? t.name : null;
-            if (!s.draftRunning()) return new CaptainView(f, team, List.of(), List.of(), false, false);
+            if (!s.draftRunning()) {
+                return new CaptainView(f, team, List.of(), List.of(), false, false, false, null, null, null, null, null);
+            }
             Draft d = s.draft;
             d.firstQueued(captainId); // drops anyone already taken
             List<Player> queue = d.queueFor(captainId).stream().map(d::findEligible)
                     .flatMap(Optional::stream).toList();
             List<Player> picks = d.picksFor(captainId).stream().filter(p -> !p.dropped).map(p -> p.player).toList();
-            return new CaptainView(f, team, picks, queue, true, Objects.equals(d.currentCaptain(), captainId));
+            Integer away = null, next = null;
+            int start = d.nextPickIndex();
+            for (int i = 0; i < d.eligible.size(); i++) { // one pick per remaining player
+                if (Objects.equals(d.captainForPick(start + i), captainId)) {
+                    away = i;
+                    next = start + i + 1;
+                    break;
+                }
+            }
+            return new CaptainView(f, team, picks, queue, true, Objects.equals(d.currentCaptain(), captainId),
+                    d.status == DraftStatus.PAUSED, d.currentCaptain(), d.turnDeadlineMs, d.pausedRemainingMs,
+                    away, next);
         });
     }
 
@@ -1180,7 +1213,7 @@ public class DraftManager {
             } else {
                 d.turnDeadlineMs = null;
                 d.turnToken++;
-                dm(captain, "⏰ Your time is up! You can still `/pick`, or leadership can `/adminpick` for you.");
+                dm(captain, "⏰ Your time is up! You can still `/pick`, or leadership can pick for you with 🛡️ Admin Pick.");
             }
             commit(f, s, g);
             return null;
@@ -1240,6 +1273,11 @@ public class DraftManager {
         TextChannel ch = g.getTextChannelById(d.channelId);
         if (ch != null) ch.deleteMessageById(d.lastPingMessageId).queue(null, e -> {});
         d.lastPingMessageId = null;
+    }
+
+    private static boolean teamNamed(FactionState s, long captainId) {
+        Team t = s.teams.get(captainId);
+        return t != null && t.roleId != null;
     }
 
     private void dm(Long userId, String text) {

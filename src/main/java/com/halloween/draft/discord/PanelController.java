@@ -86,6 +86,12 @@ public class PanelController {
             return this;
         }
 
+        /** The result of the last action, as a quote block so it stands apart from the panel itself. */
+        Ui notice(String text) {
+            if (text == null || text.isBlank()) return this;
+            return text("> " + text.strip().replace("\n", "\n> "));
+        }
+
         Ui heading(String title) {
             return text("### " + title);
         }
@@ -371,16 +377,17 @@ public class PanelController {
         // The first unfinished step, in order, is the one to highlight.
         int next = !captainsDone ? 0 : !namesDone ? 1 : !timesDone ? 2 : !keysDone ? 3 : -1;
 
-        Ui ui = new Ui(BLURPLE).text("## 🎛️ " + f.getName() + " · Draft Control");
-        ui.text(notice);
-        ui.text(lastDraftLine(p) + "**Not started** · " + done + " of 4 setup steps done");
+        Ui ui = new Ui(BLURPLE).text("## 🎛️ " + f.getName() + " · Draft Control\n"
+                + lastDraftLine(p) + "-# Not started · " + done + " of 4 setup steps done");
+        ui.notice(notice);
 
         ui.divider().heading("📋 Setup — required, in order");
-        ui.text(check(captainsDone, "Captains — " + (p.captains().isEmpty() ? "none yet" : p.captains().size() + " set")) + "\n"
-                + check(namesDone, "Team names — " + named + " of " + p.captains().size()) + "\n"
-                + check(timesDone, "Competition times — " + (timesDone
-                ? DraftManager.tct(comp.start()) + " → " + DraftManager.tct(comp.end()) + " TCT" : "not set")) + "\n"
-                + check(keysDone, "API keys — " + comp.keys() + " of " + CompetitionService.MIN_KEYS));
+        ui.text(check(captainsDone, next == 0, "Captains", p.captains().isEmpty() ? "none yet" : p.captains().size() + " set") + "\n"
+                + check(namesDone, next == 1, "Team names", p.captains().isEmpty() ? "after captains"
+                : named + " of " + p.captains().size()) + "\n"
+                + check(timesDone, next == 2, "Competition times", timesDone
+                ? DraftManager.tct(comp.start()) + " → " + DraftManager.tct(comp.end()) + " TCT" : "not set") + "\n"
+                + check(keysDone, next == 3, "API keys", comp.keys() + " of " + CompetitionService.MIN_KEYS));
         ui.buttons(
                 step(captainsDone, next == 0, id("setcap", f), "👑", "Captains"),
                 step(namesDone, next == 1, id("name", f), "🏷️", "Team Names"),
@@ -408,11 +415,13 @@ public class PanelController {
                     isCaptain ? Button.secondary(id("my", f), "🎯 My Team") : null);
         }
 
-        ui.divider().heading("🏁 Competition");
-        ui.text(competitionLines(comp, false));
+        if (comp.start() != null) { // before that, the setup checklist already says what's missing
+            ui.divider().heading("🏁 Competition");
+            ui.text(competitionLines(comp, false));
+        }
 
         ui.divider();
-        ui.buttons(admin ? Button.danger(id("td", f), "🧹 Teardown") : null,
+        ui.buttons(admin ? Button.secondary(id("td", f), "🧹 Teardown") : null,
                 Button.secondary(id("close", f), "✖ Close"));
         ui.text("-# Only you can see this panel · it closes after " + PANEL_MINUTES + " minutes");
         return ui.build();
@@ -424,7 +433,7 @@ public class PanelController {
         boolean paused = p.status() == DraftStatus.PAUSED;
 
         Ui ui = new Ui(BLURPLE).text("## 🎛️ " + f.getName() + " · Draft Control");
-        ui.text(notice);
+        ui.notice(notice);
         ui.text(clockLine(p) + "\n-# " + p.picksMade() + " picks made · "
                 + (p.timerSeconds() > 0 ? p.timerSeconds() / 60 + " min timer" : "no timer")
                 + " · auto-pick " + (p.autopick() ? "on" : "off"));
@@ -458,7 +467,7 @@ public class PanelController {
     private View viewerHome(Guild g, Faction f, String notice) {
         PanelInfo p = drafts.panelInfo(g, f);
         Ui ui = new Ui(BLURPLE).text("## 🏆 " + f.getName() + " · Draft");
-        ui.text(notice);
+        ui.notice(notice);
         ui.text(p.running() ? clockLine(p) : lastDraftLine(p) + "**Not started**");
         if (!p.captains().isEmpty()) ui.divider().heading("👑 Teams").text(captainLines(p, p.running()));
         if (p.poolPrepared()) {
@@ -473,15 +482,14 @@ public class PanelController {
     View captainHome(Guild g, Member m, Faction f, String notice) {
         CaptainView c = drafts.captainView(f, m.getIdLong());
         Ui ui = new Ui(ORANGE).text("## 🎯 " + f.getName() + " · " + (c.team() == null ? "Your Team" : c.team()));
-        ui.text(notice);
+        ui.notice(notice);
+
+        ui.heading("📍 Status");
         if (c.team() == null) ui.text("⚠️ **Your team needs a name** before the draft can start.");
-        if (!c.running()) ui.text("The draft hasn't started yet. Your picks and queue show here once it does.");
-        else ui.text(c.onClock() ? "🎯 **You're on the clock!** Use `/pick`." : "⏳ Waiting for your turn — use `/pick` when it comes.");
+        ui.text(c.running() ? turnLine(c) : "The draft hasn't started yet. Your queue and picks show here once it does.");
 
         if (c.running()) {
-            ui.divider().heading("🧾 Your picks (" + c.picks().size() + ")");
-            ui.text(c.picks().isEmpty() ? "-# None yet." : bullets(c.picks(), 20));
-
+            // Queue first: it's what captains act on, and it stays put as the picks list grows.
             ui.divider().heading("📋 Your queue (" + c.queue().size() + "/5)");
             ui.text(c.queue().isEmpty()
                     ? "-# Empty. Queued players are picked for you automatically when your turn starts."
@@ -489,6 +497,10 @@ public class PanelController {
             ui.buttons(c.queue().size() < 5 ? Button.primary(id("qadd", f), "➕ Queue Player") : null,
                     c.queue().isEmpty() ? null : Button.secondary(id("qrm", f), "➖ Unqueue"),
                     c.queue().isEmpty() ? null : Button.secondary(id("qclr", f), "🗑️ Clear"));
+
+            ui.divider().heading("🧾 Your picks (" + c.picks().size() + ")");
+            ui.text(c.picks().isEmpty() ? "-# None yet." : bullets(c.picks(), 20)
+                    + (c.picks().size() > 20 ? "-# …and " + (c.picks().size() - 20) + " more" : ""));
         }
 
         boolean poolReady = !drafts.poolList(f).isEmpty();
@@ -687,7 +699,7 @@ public class PanelController {
         }
         Ui ui = new Ui(BLURPLE)
                 .text("## 🔑 " + f.getName() + " · API Keys")
-                .text(notice)
+                .notice(notice)
                 .text("Keys read **outgoing faction attacks** during the competition. Each must be a **Limited** key from a "
                         + f.getName() + " member with **Faction API Access**, and at least " + CompetitionService.MIN_KEYS
                         + " are needed. Keys are stored encrypted and never shown again.")
@@ -707,6 +719,21 @@ public class PanelController {
     // =====================================================================
     // Text pieces
     // =====================================================================
+
+    /** Where a captain stands: on the clock (with countdown), paused, or how many picks away. */
+    private static String turnLine(CaptainView c) {
+        String timer = c.deadlineMs() == null ? "" : " · ⏱ <t:" + c.deadlineMs() / 1000 + ":R>";
+        if (c.paused()) {
+            String left = c.pausedRemainingMs() == null ? "" : " · " + Math.max(1, c.pausedRemainingMs() / 1000) + "s left on the clock";
+            return c.onClock() ? "⏸️ **Draft paused** — you're on the clock when it resumes" + left
+                    : "⏸️ **Draft paused** — <@" + c.clockCaptain() + "> is up next" + left;
+        }
+        if (c.onClock()) return "🎯 **You're on the clock!** Use `/pick` — this is pick #" + c.nextPick() + timer;
+        if (c.picksAway() == null) return "✅ You've no picks left — there aren't enough players for another round.";
+        String away = c.picksAway() == 1 ? "**You're next**" : "**" + c.picksAway() + " picks away**";
+        return "⏳ " + away + " — your next pick is #" + c.nextPick()
+                + "\n-# On the clock: <@" + c.clockCaptain() + ">" + timer;
+    }
 
     private static String clockLine(PanelInfo p) {
         if (p.status() == DraftStatus.PAUSED) return "⏸️ **Paused** — <@" + p.onClock() + "> is up next";
@@ -738,7 +765,7 @@ public class PanelController {
     private static String competitionLines(CompetitionService.Status st, boolean withTimes) {
         StringBuilder sb = new StringBuilder();
         if (st.start() == null) {
-            sb.append("-# Not scheduled.\n");
+            sb.append("Not scheduled\n");
         } else {
             if (withTimes) {
                 sb.append("🗓️ ").append(DraftManager.tct(st.start())).append(" → ")
@@ -760,8 +787,10 @@ public class PanelController {
         return sb.toString();
     }
 
-    private static String check(boolean done, String text) {
-        return done ? "✅ " + text : "⬜ **" + text + "**";
+    /** A checklist line: ✅ when done, ▫️ when not; only the next step is bold. */
+    private static String check(boolean done, boolean next, String step, String detail) {
+        if (done) return "✅ " + step + " · " + detail;
+        return next ? "▫️ **" + step + "** · " + detail : "▫️ " + step + " · " + detail;
     }
 
     /** A required-step button: ✅ once done (grey), blue when it's the next step, grey otherwise. */
