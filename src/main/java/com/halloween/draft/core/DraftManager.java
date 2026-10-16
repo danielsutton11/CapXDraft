@@ -222,10 +222,6 @@ public class DraftManager {
             if (random) Collections.shuffle(unique);
 
             List<Long> newIds = unique.stream().map(Member::getIdLong).toList();
-            for (Long old : s.captains) {
-                if (!newIds.contains(old) && !isCaptainElsewhere(old, f.getKey())) teams.setCaptainRole(g, old, false);
-            }
-            newIds.forEach(id -> teams.setCaptainRole(g, id, true));
             List<Long> previous = s.captains == null ? List.of() : s.captains;
             s.captains = new ArrayList<>(newIds);
 
@@ -319,7 +315,6 @@ public class DraftManager {
                 d.captainOrder.add(m.getIdLong());
                 d.captainNames.put(m.getIdLong(), m.getEffectiveName());
                 d.queues.put(m.getIdLong(), new ArrayList<>());
-                teams.setCaptainRole(g, m.getIdLong(), true);
             });
             d.eligible = pool;
             d.sortEligible();
@@ -433,8 +428,6 @@ public class DraftManager {
                 teams.setTeamCaptain(g, team, oldId, false);
                 teams.setTeamCaptain(g, team, newId, true);
             }
-            if (!isCaptainElsewhere(oldId, f.getKey())) teams.setCaptainRole(g, oldId, false);
-            teams.setCaptainRole(g, newId, true);
 
             boolean named = team != null && team.roleId != null;
             dm(newId, "🔁 You're now a " + f.getName() + " captain"
@@ -1079,45 +1072,80 @@ public class DraftManager {
     // Admin teardown (all factions)
     // =====================================================================
 
-    public String checkTeardown(Member invoker) {
+    /** Checks Clean Up is allowed for this faction and returns a summary of what it will remove. */
+    public String checkTeardown(Member invoker, Faction f) {
         if (!invoker.hasPermission(Permission.ADMINISTRATOR)) throw new UserError("Server admins only.");
-        long nowEpoch = System.currentTimeMillis() / 1000;
-        List<String> live = props.getFactions().stream().filter(f -> state(f).competition.live(nowEpoch))
-                .map(Faction::getName).toList();
-        if (!live.isEmpty()) {
-            throw new UserError("Competitions are live for: " + String.join(", ", live)
-                    + ". Clean Up removes the teams they're scored on, so wait until they finish.");
+        FactionState s = state(f);
+        if (s.competition.live(System.currentTimeMillis() / 1000)) {
+            throw new UserError("The " + f.getName() + " competition is live. Clean Up removes the teams it's "
+                    + "scored on, so wait until it finishes.");
         }
-        List<String> running = props.getFactions().stream().filter(f -> state(f).draftRunning()).map(Faction::getName).toList();
-        if (!running.isEmpty()) {
-            throw new UserError("These drafts are still running: " + String.join(", ", running) + ". End them first.");
-        }
-        int count = props.getFactions().stream().mapToInt(f -> state(f).teams.size()).sum();
-        return count + " team" + (count == 1 ? "" : "s") + " across all factions";
+        if (s.draftRunning()) throw new UserError("The " + f.getName() + " draft is still running. End it first.");
+        int count = s.teams.size();
+        return count + " " + f.getName() + " team" + (count == 1 ? "" : "s");
     }
 
-    public String teardown(Guild g, Member invoker, boolean clearCaptains) {
-        checkTeardown(invoker);
-        int deleted = 0;
-        for (Faction f : props.getFactions()) {
-            deleted += withLock(f.getKey(), () -> {
-                FactionState s = state(f);
-                int n = s.teams.size();
-                s.teams.values().forEach(t -> teams.delete(g, t));
-                s.teams.clear();
-                s.draft = null; // finished drafts stay visible on their boards
-                s.pool = null;
-                s.excludedIds.clear();
-                s.excludedTornIds.clear();
-                s.competition = new com.halloween.draft.model.Competition(); // final scoreboards stay posted
-                if (clearCaptains) s.captains.clear();
-                save(s);
-                return n;
-            });
+    /**
+     * Clean Up for one faction: its teams (roles and channels), captains' state, participant list,
+     * competition, its draft board in its draft channel and its scoreboard in the scoreboard channel.
+     */
+    public String teardown(Guild g, Member invoker, Faction f, boolean clearCaptains) {
+        checkTeardown(invoker, f);
+        long[] scoreboardId = new long[1];
+        int deleted = withLock(f.getKey(), () -> {
+            FactionState s = state(f);
+            int n = s.teams.size();
+            s.teams.values().forEach(t -> teams.delete(g, t));
+            s.teams.clear();
+            if (s.competition.scoreboardMessageId != null) scoreboardId[0] = s.competition.scoreboardMessageId;
+            s.draft = null;
+            s.pool = null;
+            s.excludedIds.clear();
+            s.excludedTornIds.clear();
+            s.competition = new com.halloween.draft.model.Competition();
+            if (clearCaptains) s.captains.clear();
+            save(s);
+            return n;
+        });
+
+        int messages = clearOwnMessages(g.getTextChannelById(f.getChannelId()));
+        boolean scoreboard = deleteScoreboard(g, f, scoreboardId[0]);
+
+        return "🧹 " + f.getName() + " cleaned up: deleted " + deleted + " team" + (deleted == 1 ? "" : "s")
+                + " (roles, text and voice channels)"
+                + (clearCaptains ? ", cleared the captains" : "")
+                + ", cleared " + messages + " bot message" + (messages == 1 ? "" : "s") + " from <#" + f.getChannelId() + ">"
+                + (scoreboard ? " and removed the scoreboard." : ".");
+    }
+
+    /**
+     * Deletes this faction's scoreboard message. Uses the stored message id, or failing that looks
+     * for the bot's message titled "🎃 &lt;Faction&gt; …" among the last 100 in the scoreboard channel.
+     */
+    private boolean deleteScoreboard(Guild g, Faction f, long messageId) {
+        TextChannel ch = g.getTextChannelById(props.getScoreboardChannelId());
+        if (ch == null) return false;
+        try {
+            if (messageId != 0) {
+                ch.deleteMessageById(messageId).complete();
+                return true;
+            }
+        } catch (Exception e) {
+            log.info("Stored scoreboard message for {} is gone ({}), searching the channel", f.getName(), e.getMessage());
         }
-        int captainsCleared = clearCaptains ? teams.clearCaptainRole(g) : 0;
-        return "Deleted " + deleted + " team" + (deleted == 1 ? "" : "s") + " (roles, text and voice channels)"
-                + (clearCaptains ? " and removed the captain role from " + captainsCleared + " member(s)." : ".");
+        try {
+            long self = g.getSelfMember().getIdLong();
+            String prefix = "🎃 " + f.getName() + " ";
+            List<Message> mine = ch.getHistory().retrievePast(100).complete().stream()
+                    .filter(m -> m.getAuthor().getIdLong() == self)
+                    .filter(m -> m.getEmbeds().stream().anyMatch(e -> e.getTitle() != null && e.getTitle().startsWith(prefix)))
+                    .toList();
+            mine.forEach(m -> m.delete().queue(null, err -> {}));
+            return !mine.isEmpty();
+        } catch (Exception e) {
+            log.warn("Couldn't clear the {} scoreboard: {}", f.getName(), e.getMessage());
+            return false;
+        }
     }
 
     // =====================================================================
@@ -1247,15 +1275,21 @@ public class DraftManager {
                 + clock + ".\nDraft board: " + boardLink(g, d));
     }
 
-    /** Deletes the bot's own recent messages in a channel. Other people's messages are left alone. */
-    private void clearOwnMessages(TextChannel ch) {
+    /**
+     * Deletes the bot's own messages among the last 100 in a channel and returns how many.
+     * Other people's messages are left alone. A missing channel counts as nothing to clear.
+     */
+    private int clearOwnMessages(TextChannel ch) {
+        if (ch == null) return 0;
         try {
             long self = ch.getGuild().getSelfMember().getIdLong();
             List<Message> mine = ch.getHistory().retrievePast(100).complete().stream()
                     .filter(m -> m.getAuthor().getIdLong() == self).toList();
             mine.forEach(m -> m.delete().queue(null, e -> {}));
+            return mine.size();
         } catch (Exception e) {
             log.warn("Couldn't clear old bot messages in #{}: {}", ch.getName(), e.getMessage());
+            return 0;
         }
     }
 
@@ -1434,12 +1468,6 @@ public class DraftManager {
             });
         }
         return d;
-    }
-
-    private boolean isCaptainElsewhere(long userId, String exceptKey) {
-        return states.values().stream()
-                .filter(s -> !s.factionKey.equals(exceptKey))
-                .anyMatch(s -> s.captains.contains(userId) || s.activeCaptains().contains(userId));
     }
 
     private Guild guildFor(Draft d) {

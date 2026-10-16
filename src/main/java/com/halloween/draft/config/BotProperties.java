@@ -11,7 +11,6 @@ public class BotProperties {
 
     private String token;
     private String tornApiKey;
-    private long captainRoleId;
     private long teamCategoryId;
     private int maxQueue = 5;
     private String eventName = "";
@@ -54,8 +53,6 @@ public class BotProperties {
     public void setToken(String token) { this.token = token; }
     public String getTornApiKey() { return tornApiKey; }
     public void setTornApiKey(String tornApiKey) { this.tornApiKey = tornApiKey; }
-    public long getCaptainRoleId() { return captainRoleId; }
-    public void setCaptainRoleId(long captainRoleId) { this.captainRoleId = captainRoleId; }
     public long getTeamCategoryId() { return teamCategoryId; }
     public void setTeamCategoryId(long teamCategoryId) { this.teamCategoryId = teamCategoryId; }
     public long getScoreboardChannelId() { return scoreboardChannelId; }

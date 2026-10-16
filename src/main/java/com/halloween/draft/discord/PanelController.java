@@ -224,20 +224,23 @@ public class PanelController {
                     Button.danger(id("endok", f), "🛑 Yes, end draft"));
             case "endok" -> home(g, m, f, drafts.endDraft(g, m, f.getKey()));
             case "td" -> {
-                String summary = drafts.checkTeardown(m);
+                String summary = drafts.checkTeardown(m, f);
                 yield new Ui(RED)
-                        .text("## 🧹 Clean Up — all factions")
+                        .text("## 🧹 Clean Up — " + f.getName())
                         .text("This deletes **" + summary + "**: their roles, captain roles, text and voice channels, "
-                                + "the prepared participant lists, removals and competition times.\n"
-                                + "Finished boards and scoreboards stay posted.")
+                                + "the participant list, removals and competition times. It also clears the bot's board "
+                                + "and messages from <#" + f.getChannelId() + "> and the " + f.getName()
+                                + " scoreboard from the live scores channel.\n"
+                                + "-# Other factions and other people's messages aren't touched.")
                         .divider()
-                        .heading("Also remove the Halloween Captain role from everyone?")
-                        .buttons(Button.danger(id("tdok", f, "1"), "Delete all + clear captains"),
-                                Button.danger(id("tdok", f, "0"), "Delete all, keep captains"))
+                        .heading("Keep the captains for the next draft?")
+                        .text("-# Keeping them saves choosing them again; they'll need to name new teams.")
+                        .buttons(Button.danger(id("tdok", f, "1"), "Clean up everything"),
+                                Button.danger(id("tdok", f, "0"), "Clean up, keep captains"))
                         .buttons(Button.secondary(id("home", f), "Back"))
                         .build();
             }
-            case "tdok" -> home(g, m, f, drafts.teardown(g, m, a[2].equals("1")));
+            case "tdok" -> home(g, m, f, drafts.teardown(g, m, f, a[2].equals("1")));
             case "my" -> captainHome(g, m, f, null);
             case "keys" -> keysView(f, null);
             case "qclr" -> captainHome(g, m, f, drafts.queueClear(m, ch));

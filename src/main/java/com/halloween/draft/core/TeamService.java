@@ -259,25 +259,6 @@ public class TeamService {
         action.queue(null, e -> log.warn("Could not update team captain role for {}: {}", memberId, e.getMessage()));
     }
 
-    public void setCaptainRole(Guild guild, long memberId, boolean give) {
-        Role role = guild.getRoleById(props.getCaptainRoleId());
-        if (role == null) return;
-        var action = give
-                ? guild.addRoleToMember(UserSnowflake.fromId(memberId), role)
-                : guild.removeRoleFromMember(UserSnowflake.fromId(memberId), role);
-        action.queue(null, e -> log.warn("Could not update captain role for {}: {}", memberId, e.getMessage()));
-    }
-
-    /** Removes the shared captain role from everyone who has it. */
-    public int clearCaptainRole(Guild guild) {
-        Role role = guild.getRoleById(props.getCaptainRoleId());
-        if (role == null) return 0;
-        List<net.dv8tion.jda.api.entities.Member> holders = guild.getMembersWithRoles(role);
-        holders.forEach(m -> guild.removeRoleFromMember(UserSnowflake.fromId(m.getIdLong()), role)
-                .queue(null, e -> {}));
-        return holders.size();
-    }
-
     private static EnumSet<Permission> only(EnumSet<Permission> wanted, EnumSet<Permission> has) {
         EnumSet<Permission> out = EnumSet.copyOf(wanted);
         out.retainAll(has);

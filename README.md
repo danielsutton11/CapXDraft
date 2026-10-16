@@ -23,7 +23,10 @@ Before the draft:
 - **👥 Participants:** View, Add (Discord member or Torn ID), Remove, Rebuild List.
 - **👑 Captains:** the list, Replace Captain, My Team (if you're a captain too).
 - **🏁 Competition:** live status.
-- Clean Up (admins only) and Close.
+- Clean Up (server admins only) and Close. Clean Up works on the panel's faction only: it deletes that
+  faction's teams (roles, text and voice channels), participant list and competition, clears the bot's
+  messages from its draft channel and removes its scoreboard from the live scores channel. Other
+  factions are untouched.
 
 During the draft: Pause/Resume, Undo, Admin Pick at the top, then Participants, Teams (Replace
 Captain, Team Names), Competition (times and keys), and End Draft.
@@ -51,7 +54,7 @@ A read-only status view: who's on the clock, the captains and their teams, and t
 - **Teams:** `/nameteam Alpha` creates an "Alpha" role, an "Alpha Captain" role (given only to that
   team's captain) and a text + voice channel in the team category. Only the team (plus any roles in
   `team-channel-role-ids`, empty by default) and the bot can see them. Players get the team role as
-  they're picked; renaming updates both roles and the channels; `/replacecaptain` moves the captain role.
+  they're picked; renaming updates both roles and the channels; Replace Captain moves the team's captain role.
 - **Torn streaks:** Torn IDs are read from nicknames like `Name [123456]`. Active streaks are
   fetched in the background at draft start, cached, and shown in `/pick`, `/queue` and `/adminpick` suggestions.
 - **Players not on Discord:** shown as "not on Discord" in suggestions, on the board and in
@@ -78,7 +81,7 @@ on Discord); defender not in one of the other family factions; attack ended insi
 Stealthed attacks count. The scoreboard ranks teams and lists each team's top 10 hitters, and is
 marked **🏁 Final** two minutes after the end once the last hits are in.
 
-If every key fails, the leaders who added them get a DM. Clean Up is blocked while a competition is live.
+If every key fails, the leaders who added them get a DM. A faction's Clean Up is blocked while its draft is running or its competition is live.
 
 ## Railway setup
 
@@ -98,12 +101,12 @@ There's no web port, so leave the healthcheck off.
 - **Server Members Intent** must be enabled in the developer portal. The old bot already used it.
 - **Bot permissions:** Manage Roles, Manage Channels, Manage Messages, View
   Channels, Send Messages, Embed Links, Connect.
-- **Role order:** the bot's role must sit **above** the captain role. Team roles it creates are
+- **Role order:** team roles and team captain roles it creates are
   placed under its own role automatically.
 
 ## Config
 
-Faction roles, draft channels, the captain role and the team category are set in
+Faction roles, draft channels and the team category are set in
 `src/main/resources/application.yml`.
 
 ## Building locally

@@ -24,9 +24,6 @@ draftbot:
   # Encrypts stored faction API keys. Set once on Railway and never change it.
   key-encryption-secret: ${KEY_ENCRYPTION_SECRET:}
 
-  # Shared captain role, given/taken by /setcaptains and /replacecaptain
-  captain-role-id: 1422656496088514632
-
   # Category where team text + voice channels are created (all factions)
   team-category-id: 1560730618751352873
 
