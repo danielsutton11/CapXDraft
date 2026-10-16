@@ -12,6 +12,7 @@ import net.dv8tion.jda.api.entities.channel.concrete.Category;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.entities.channel.concrete.VoiceChannel;
 import net.dv8tion.jda.api.entities.channel.attribute.IPermissionContainer;
+import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -38,6 +39,8 @@ public class TeamService {
             Permission.VIEW_CHANNEL, Permission.MANAGE_CHANNEL, Permission.MESSAGE_SEND);
     private static final EnumSet<Permission> BOT_VOICE = EnumSet.of(
             Permission.VIEW_CHANNEL, Permission.MANAGE_CHANNEL, Permission.VOICE_CONNECT);
+    private static final EnumSet<Permission> CAPTAIN_CHANNEL_ALLOW = EnumSet.of(
+            Permission.VIEW_CHANNEL, Permission.MESSAGE_HISTORY, Permission.USE_APPLICATION_COMMANDS);
     private static final EnumSet<Permission> NONE = EnumSet.noneOf(Permission.class);
     private static final EnumSet<Permission> HIDE = EnumSet.of(Permission.VIEW_CHANNEL);
 
@@ -181,6 +184,24 @@ public class TeamService {
             guild.removeRoleFromMember(UserSnowflake.fromId(memberId), role)
                     .queue(null, e -> log.warn("Could not remove team role from {}: {}", memberId, e.getMessage()));
         }
+    }
+
+    /**
+     * Lets the team's captain role see and use a channel (e.g. the draft channel /nameteam was run in).
+     * @return permissions Discord refused, empty if all went through
+     */
+    public Set<String> grantCaptainChannelAccess(Guild guild, Team team, long channelId) {
+        Set<String> refused = new TreeSet<>();
+        Role role = team == null || team.captainRoleId == null ? null : guild.getRoleById(team.captainRoleId);
+        GuildChannel channel = guild.getGuildChannelById(channelId);
+        if (role == null || !(channel instanceof IPermissionContainer container)) return refused;
+        EnumSet<Permission> has = EnumSet.copyOf(guild.getSelfMember().getPermissions(channel));
+        if (!has.contains(Permission.MANAGE_PERMISSIONS)) {
+            refused.add("all (I need Manage Permissions in #" + channel.getName() + ")");
+            return refused;
+        }
+        grant(container, role, only(CAPTAIN_CHANNEL_ALLOW, has), refused, role.getName());
+        return refused;
     }
 
     /** Gives or takes the team's own "<name> Captain" role. */

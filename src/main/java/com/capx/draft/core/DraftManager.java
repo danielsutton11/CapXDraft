@@ -587,6 +587,7 @@ public class DraftManager {
                 Set<String> refused;
                 try {
                     refused = teams.create(g, f, team, colour, me, members);
+                    refused.addAll(teams.grantCaptainChannelAccess(g, team, channelId));
                 } catch (Exception e) {
                     log.error("Team creation failed for {}", name, e);
                     teams.delete(g, team);
