@@ -301,10 +301,12 @@ public class PanelController {
         boolean admin = m.hasPermission(Permission.ADMINISTRATOR);
         List<LayoutComponent> rows = new ArrayList<>();
 
+        CompetitionService.Status comp = competitions.status(f);
         if (!p.running()) {
             boolean needCaptains = p.captains().size() < 2;
             boolean needNames = !needCaptains && !p.allTeamsNamed();
-            boolean ready = !needCaptains && !needNames;
+            boolean ready = !needCaptains && !needNames && comp.start() != null
+                    && comp.keys() >= CompetitionService.MIN_KEYS;
 
             boolean hasCaptains = !p.captains().isEmpty();
             addRow(rows,
@@ -337,10 +339,12 @@ public class PanelController {
                     isCaptain ? Button.secondary(id("my", f), "🎯 My Team") : null);
         }
 
-        int keyCount = competitions.keys(f).size();
-        rows.add(ActionRow.of(
-                Button.secondary(id("ctimes", f), "🗓️ Competition Times"),
-                Button.secondary(id("keys", f), "🔑 API Keys (" + keyCount + ")")));
+        // Highlight the competition buttons once they're the next thing to do.
+        boolean teamsReady = !p.running() && p.captains().size() >= 2 && p.allTeamsNamed();
+        addRow(rows,
+                style(teamsReady && comp.start() == null, id("ctimes", f), "🗓️ Competition Times"),
+                style(teamsReady && comp.start() != null && comp.keys() < CompetitionService.MIN_KEYS, id("keys", f),
+                        "🔑 API Keys (" + comp.keys() + ")"));
 
         // Last row: anything destructive, kept away from the everyday buttons, then Close.
         List<Button> last = new ArrayList<>();
@@ -349,7 +353,7 @@ public class PanelController {
         last.add(Button.secondary(id("close", f), "✖ Close"));
         rows.add(ActionRow.of(last));
 
-        MessageEmbed status = statusEmbed(p, "🎛️ " + f.getName() + " · Draft Control", notice, nextStep(p));
+        MessageEmbed status = statusEmbed(p, "🎛️ " + f.getName() + " · Draft Control", notice, nextStep(p, comp));
         return View.of(new EmbedBuilder(status).addField("🏁 Competition", competitionSummary(f), false).build(), rows);
     }
 
@@ -363,10 +367,15 @@ public class PanelController {
     }
 
     /** The one thing a leader should do next, shown under the status. */
-    private static String nextStep(PanelInfo p) {
+    private static String nextStep(PanelInfo p, CompetitionService.Status comp) {
         if (p.running()) return null;
         if (p.captains().size() < 2) return "Choose at least 2 captains with **👑 Captains** — that also builds the participant list.";
         if (!p.allTeamsNamed()) return "Every team needs a name — use **🏷️ Team Names** (or let captains name their own).";
+        if (comp.start() == null) return "Set the competition start and end with **🗓️ Competition Times**.";
+        if (comp.keys() < CompetitionService.MIN_KEYS) {
+            return "Add at least " + CompetitionService.MIN_KEYS + " faction API keys with **🔑 API Keys** ("
+                    + comp.keys() + " so far).";
+        }
         return "All set — check the participants, then **▶️ Start Draft**.";
     }
 

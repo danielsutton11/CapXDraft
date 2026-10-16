@@ -68,6 +68,7 @@ public class DraftManager {
     private final TeamService teams;
     private final TornService torn;
     private final TimerService timers;
+    private final com.halloween.draft.competition.CompetitionRepository competitionRepo;
 
     private final Map<String, FactionState> states = new ConcurrentHashMap<>();
     private final Map<String, ReentrantLock> locks = new ConcurrentHashMap<>();
@@ -75,13 +76,15 @@ public class DraftManager {
     private volatile JDA jda;
 
     public DraftManager(BotProperties props, StateRepository repo, BoardRenderer board,
-                        TeamService teams, TornService torn, TimerService timers) {
+                        TeamService teams, TornService torn, TimerService timers,
+                        com.halloween.draft.competition.CompetitionRepository competitionRepo) {
         this.props = props;
         this.repo = repo;
         this.board = board;
         this.teams = teams;
         this.torn = torn;
         this.timers = timers;
+        this.competitionRepo = competitionRepo;
     }
 
     @PostConstruct
@@ -268,6 +271,16 @@ public class DraftManager {
             if (!unnamed.isEmpty()) {
                 throw new UserError("These captains still need a team name: "
                         + String.join(", ", unnamed) + ".");
+            }
+            // The competition has to be ready before anyone is drafted into it.
+            if (!s.competition.scheduled()) {
+                throw new UserError("Set the competition times first (🗓️ Competition Times).");
+            }
+            int keys = competitionRepo.keys(f.getKey()).size();
+            int needed = com.halloween.draft.competition.CompetitionService.MIN_KEYS;
+            if (keys < needed) {
+                throw new UserError("Add at least " + needed + " faction API keys first (🔑 API Keys) — "
+                        + keys + " added so far.");
             }
 
             // Pool: the one prepared with /buildpool, or build it now (draft role + Torn faction members).

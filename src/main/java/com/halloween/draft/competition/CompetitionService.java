@@ -46,6 +46,8 @@ public class CompetitionService {
     /** Successful outcomes. Lost, Stalemate, Assist, Escape, Timeout, Interrupted and None don't count. */
     public static final List<String> COUNTED = List.of(
             "Attacked", "Mugged", "Hospitalized", "Arrested", "Looted", "Special", "Bounty");
+    /** Keys needed before a draft can start, so monitoring survives one key failing. */
+    public static final int MIN_KEYS = 2;
     private static final long POLL_MS = 60_000;
     private static final long OVERLAP_SECONDS = 600; // re-read 10 minutes to catch long fights
     private static final int TOP_HITTERS = 10;
