@@ -110,6 +110,7 @@ public class DraftManager {
                     commit(f, s, g);
                     return null;
                 });
+                fetchMissingStreaks(f, 1); // anything a previous run didn't get to
             } catch (Exception e) {
                 log.error("Failed to resume draft for {}", f.getKey(), e);
             }
@@ -922,9 +923,22 @@ public class DraftManager {
     // Internals
     // =====================================================================
 
+    private static final int STREAK_RETRIES = 3;
+    private static final long STREAK_RETRY_DELAY_MS = 120_000;
+
     private void fetchStreaks(Faction f, List<Player> players) {
+        fetchStreaks(f, players, 1);
+    }
+
+    /**
+     * Looks up Torn active streaks in the background. Anyone still missing afterwards (rate limits,
+     * a Torn hiccup, a redeploy mid-fetch) is retried a couple of minutes later, up to 3 passes.
+     */
+    private void fetchStreaks(Faction f, List<Player> players, int attempt) {
         Map<Long, Long> ids = new LinkedHashMap<>();
         players.stream().filter(p -> p.tornId != null).forEach(p -> ids.put(p.id, p.tornId));
+        if (ids.isEmpty()) return;
+        log.info("{}: fetching Torn streaks for {} players (pass {})", f.getName(), ids.size(), attempt);
         torn.fetchStreaks(ids,
                 (discordId, streak) -> withLock(f.getKey(), () -> {
                     Draft d = state(f).draft;
@@ -933,12 +947,32 @@ public class DraftManager {
                     d.picks.stream().filter(p -> p.player.id == discordId).forEach(p -> p.player.streak = streak);
                     return null;
                 }),
-                () -> withLock(f.getKey(), () -> {
-                    FactionState s = state(f);
-                    Guild g = s.draft == null ? null : guildFor(s.draft);
-                    commit(f, s, g);
-                    return null;
-                }));
+                () -> {
+                    int missing = withLock(f.getKey(), () -> {
+                        FactionState s = state(f);
+                        Guild g = s.draft == null ? null : guildFor(s.draft);
+                        commit(f, s, g);
+                        return missingStreaks(s).size();
+                    });
+                    log.info("{}: streak pass {} done, {} still missing", f.getName(), attempt, missing);
+                    if (missing > 0 && attempt < STREAK_RETRIES) {
+                        timers.after(STREAK_RETRY_DELAY_MS, () -> fetchMissingStreaks(f, attempt + 1));
+                    }
+                });
+    }
+
+    private void fetchMissingStreaks(Faction f, int attempt) {
+        List<Player> missing = withLock(f.getKey(), () -> missingStreaks(state(f)));
+        if (!missing.isEmpty()) fetchStreaks(f, missing, attempt);
+    }
+
+    /** Players in a running draft (pool or drafted) with a Torn ID but no streak yet. */
+    private List<Player> missingStreaks(FactionState s) {
+        if (!s.draftRunning()) return List.of();
+        List<Player> out = new ArrayList<>();
+        s.draft.eligible.stream().filter(p -> p.tornId != null && p.streak == null).forEach(out::add);
+        s.draft.picks.stream().map(pk -> pk.player).filter(p -> p.tornId != null && p.streak == null).forEach(out::add);
+        return out;
     }
 
     private Player toPlayer(Member m) {

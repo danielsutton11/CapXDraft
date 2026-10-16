@@ -72,6 +72,7 @@ public class TornService {
             for (Map.Entry<Long, Long> e : tornIdsByDiscordId.entrySet()) {
                 Integer streak = fetchStreak(e.getValue());
                 if (streak != null) onResult.accept(e.getKey(), streak);
+                else log.info("No active streak returned for Torn ID {}", e.getValue());
                 sleep(SPACING_MS);
             }
             onDone.run();
