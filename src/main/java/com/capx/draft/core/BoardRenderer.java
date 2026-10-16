@@ -122,8 +122,7 @@ public class BoardRenderer {
             }
             String name = p.dropped ? "~~" + p.player.display + "~~" : p.player.display;
             if (mode == 0) {
-                sb.append('`').append(String.format("#%-3d", p.number)).append("` ").append(name)
-                        .append(p.player.streakLabel()).append('\n');
+                sb.append('`').append(String.format("#%-3d", p.number)).append("` ").append(name).append('\n');
             } else {
                 sb.append("• ").append(name).append('\n');
             }
