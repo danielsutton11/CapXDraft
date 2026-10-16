@@ -226,7 +226,7 @@ public class DraftManager {
             for (int i = 0; i < unique.size(); i++) {
                 sb.append(i + 1).append(". ").append(unique.get(i).getAsMention()).append('\n');
             }
-            sb.append("\nCaptains can name their team with `/nameteam`.");
+            sb.append("\nEach captain must name their team with `/nameteam` before the draft can start.");
             return sb.toString();
         });
     }
@@ -246,14 +246,9 @@ public class DraftManager {
             Role draftRole = g.getRoleById(f.getDraftRoleId());
             if (draftRole == null) throw new UserError("I can't find the " + f.getName() + " draft role.");
 
-            // Captains: set with /setcaptains, or fall back to captain role + this faction's draft role
-            if (s.captains.isEmpty()) {
-                Role capRole = g.getRoleById(props.getCaptainRoleId());
-                if (capRole != null) {
-                    s.captains = g.getMembersWithRoles(capRole, draftRole).stream()
-                            .filter(m -> !m.getUser().isBot()).map(Member::getIdLong)
-                            .collect(Collectors.toCollection(ArrayList::new));
-                }
+            // Captains must be set with /setcaptains, and every one of them must have named their team.
+            if (s.captains.size() < 2) {
+                throw new UserError("Set at least 2 captains with `/setcaptains` before starting the draft.");
             }
             List<Member> captains = new ArrayList<>();
             for (Long id : s.captains) {
@@ -261,8 +256,14 @@ public class DraftManager {
                 if (m == null) throw new UserError("Captain <@" + id + "> isn't in the server any more — run `/setcaptains` again.");
                 captains.add(m);
             }
-            if (captains.size() < 2) throw new UserError("Set at least 2 captains with `/setcaptains` first.");
             if (captains.size() > MAX_CAPTAINS) throw new UserError("Maximum is " + MAX_CAPTAINS + " captains.");
+            List<String> unnamed = captains.stream()
+                    .filter(m -> { Team t = s.teams.get(m.getIdLong()); return t == null || t.roleId == null; })
+                    .map(Member::getAsMention).toList();
+            if (!unnamed.isEmpty()) {
+                throw new UserError("These captains still need to name their team with `/nameteam`: "
+                        + String.join(", ", unnamed) + ".");
+            }
 
             Set<Long> captainIds = captains.stream().map(Member::getIdLong).collect(Collectors.toSet());
             List<Player> pool = g.getMembersWithRoles(draftRole).stream()
