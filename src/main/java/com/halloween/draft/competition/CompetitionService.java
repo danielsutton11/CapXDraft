@@ -176,7 +176,11 @@ public class CompetitionService {
     public String addKey(Member invoker, Faction f, String rawKey) {
         requireLeader(invoker, f);
         if (!crypto.configured()) {
-            throw new UserError("KEY_ENCRYPTION_SECRET isn't set on the server, so keys can't be stored safely.");
+            String secret = props.getKeyEncryptionSecret();
+            throw new UserError(secret == null || secret.isBlank()
+                    ? "KEY_ENCRYPTION_SECRET isn't set on the server, so keys can't be stored safely."
+                    : "KEY_ENCRYPTION_SECRET is too short (" + secret.length()
+                    + " characters) — it needs at least 16, so keys can't be stored safely.");
         }
         if (f.getTornFactionId() <= 0) throw new UserError("No Torn faction ID is configured for " + f.getName() + ".");
         TornAttackClient.KeyOwner owner = torn.verify(rawKey.trim(), f.getTornFactionId(), f.getName());
