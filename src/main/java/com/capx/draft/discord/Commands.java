@@ -61,7 +61,8 @@ public final class Commands {
         list.add(slash("myqueue", "Show your pick queue"));
         list.add(slash("cancelqueue", "Clear your pick queue"));
         list.add(slash("nameteam", "Name (or rename) your team — creates its role and channels")
-                .addOptions(new OptionData(OptionType.STRING, "name", "Team name", true).setRequiredLength(2, 40)));
+                .addOptions(new OptionData(OptionType.STRING, "name", "Team name", true).setRequiredLength(2, 40))
+                .addOption(OptionType.USER, "captain", "(Leadership) name the team for this captain instead of yourself"));
 
         // ---------- everyone ----------
         list.add(slash("draftstatus", "Who's on the clock, time left and who's next").addOptions(faction(props)));

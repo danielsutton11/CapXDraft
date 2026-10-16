@@ -554,13 +554,22 @@ public class DraftManager {
         });
     }
 
-    public String nameTeam(Guild g, Member captain, long channelId, String rawName) {
+    /**
+     * Names (or renames) a captain's team. Captains name their own; leadership can pass
+     * {@code forCaptain} to name one on a captain's behalf.
+     */
+    public String nameTeam(Guild g, Member invoker, long channelId, String rawName, Member forCaptain) {
         String name = rawName == null ? "" : rawName.replace("@", "").replaceAll("\\s+", " ").trim();
         if (name.length() < 2 || name.length() > 40) throw new UserError("Team names must be 2–40 characters.");
-        Faction f = resolveCaptainFaction(captain.getIdLong(), channelId, false);
+        Member captain = forCaptain != null ? forCaptain : invoker;
+        boolean onBehalf = captain.getIdLong() != invoker.getIdLong();
+        final Faction f = captainFactionFor(captain, channelId, onBehalf);
+        if (onBehalf && !isLeader(invoker, f)) {
+            throw new UserError("Only " + f.getName() + " leadership can name a team for someone else.");
+        }
         long me = captain.getIdLong();
 
-        return withLock(f.getKey(), () -> {
+        String result = withLock(f.getKey(), () -> {
             FactionState s = state(f);
             boolean taken = s.teams.entrySet().stream()
                     .anyMatch(e -> e.getKey() != me && e.getValue().name != null && e.getValue().name.equalsIgnoreCase(name));
@@ -589,7 +598,8 @@ public class DraftManager {
                     throw new UserError("I couldn't create the team role/channels (" + e.getMessage() + "). "
                             + "Check my role has Manage Roles and Manage Channels and sits above the team roles.");
                 }
-                reply = "Team **" + name + "** created: team role, **" + name + " Captain** role (yours), <#"
+                reply = "Team **" + name + "** created: team role, **" + name + " Captain** role ("
+                        + (onBehalf ? captain.getEffectiveName() + "'s" : "yours") + "), <#"
                         + team.textChannelId + "> and a voice channel.";
                 if (!refused.isEmpty()) {
                     reply += "\n⚠️ Discord wouldn't let me grant: " + String.join("; ", refused)
@@ -603,6 +613,18 @@ public class DraftManager {
             commit(f, s, g);
             return reply;
         });
+        if (onBehalf) dm(captain.getIdLong(), "🏷️ Leadership named your " + f.getName() + " team **" + name + "**.");
+        return result;
+    }
+
+    private Faction captainFactionFor(Member captain, long channelId, boolean onBehalf) {
+        try {
+            return resolveCaptainFaction(captain.getIdLong(), channelId, false);
+        } catch (UserError e) {
+            throw new UserError(onBehalf
+                    ? captain.getEffectiveName() + " isn't a captain — add them with `/setcaptains` first."
+                    : e.getMessage());
+        }
     }
 
     // =====================================================================

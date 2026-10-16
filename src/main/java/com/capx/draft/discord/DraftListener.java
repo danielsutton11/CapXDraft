@@ -135,7 +135,8 @@ public class DraftListener extends ListenerAdapter {
             case "queue" -> drafts.queueAdd(g, m, ch, str(e, "player"));
             case "myqueue" -> drafts.queueShow(m, ch);
             case "cancelqueue" -> drafts.queueClear(m, ch);
-            case "nameteam" -> drafts.nameTeam(g, m, ch, str(e, "name"));
+            case "nameteam" -> drafts.nameTeam(g, m, ch, str(e, "name"),
+                    e.getOption("captain") == null ? null : member(e, "captain"));
             case "draftstatus" -> drafts.status(m, faction, ch);
             case "remainingdraftees" -> drafts.remaining(m, faction, ch);
             case "teardownteams" -> {
