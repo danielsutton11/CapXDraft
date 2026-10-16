@@ -13,6 +13,7 @@ public class FactionState {
     public List<Long> captains = new ArrayList<>();      // order set by /setcaptains
     public Map<Long, Team> teams = new HashMap<>();      // keyed by captain id
     public Draft draft;                                  // null until the first draft
+    public Competition competition = new Competition();  // attack competition window + progress
 
     /** Pool prepared before the draft (/buildpool), reviewed and trimmed by leadership. */
     public List<Player> pool;

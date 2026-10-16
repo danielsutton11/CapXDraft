@@ -1,5 +1,6 @@
 package com.halloween.draft.discord;
 
+import com.halloween.draft.competition.CompetitionService;
 import com.halloween.draft.config.BotProperties;
 import com.halloween.draft.core.DraftManager;
 import net.dv8tion.jda.api.JDA;
@@ -25,13 +26,16 @@ public class DiscordBot implements ApplicationRunner, DisposableBean {
     private final BotProperties props;
     private final DraftListener listener;
     private final DraftManager drafts;
+    private final CompetitionService competitions;
     private final CountDownLatch running = new CountDownLatch(1);
     private JDA jda;
 
-    public DiscordBot(BotProperties props, DraftListener listener, DraftManager drafts) {
+    public DiscordBot(BotProperties props, DraftListener listener, DraftManager drafts,
+                      CompetitionService competitions) {
         this.props = props;
         this.listener = listener;
         this.drafts = drafts;
+        this.competitions = competitions;
     }
 
     @Override
@@ -48,6 +52,7 @@ public class DiscordBot implements ApplicationRunner, DisposableBean {
                 .build();
         jda.awaitReady();
         drafts.attach(jda);
+        competitions.start(jda);
 
         Thread keepAlive = new Thread(() -> {
             try {

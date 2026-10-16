@@ -22,6 +22,17 @@ public class TimerService {
         return t;
     });
 
+    /** Runs a task repeatedly; exceptions are logged and don't stop the schedule. */
+    public void every(long initialDelayMs, long periodMs, Runnable task) {
+        scheduler.scheduleWithFixedDelay(() -> {
+            try {
+                task.run();
+            } catch (Exception e) {
+                log.error("Repeating task failed", e);
+            }
+        }, initialDelayMs, periodMs, TimeUnit.MILLISECONDS);
+    }
+
     public void after(long delayMs, Runnable task) {
         scheduler.schedule(() -> {
             try {

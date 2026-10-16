@@ -14,19 +14,19 @@ There are only two:
 - **`/pick`** makes your pick, with live name suggestions.
 
 ### Leadership panel
-Before the draft: **Set Captains** (also builds the pool), **Name Team** (for any captain),
-**Replace Captain**, **View Pool**, **Add Player** (Discord member or Torn ID), **Remove Players**
-(search, then tick up to 25), **Rebuild Pool**, and **Start Draft** (timer, auto-pick and order
+Before the draft: **Set Captains** (also builds the participant list), **Name Team** (for any captain),
+**Replace Captain**, **Participants**, **Add Player** (Discord member or Torn ID), **Remove Players**
+(search, then tick up to 25), **Rebuild List**, and **Start Draft** (timer, auto-pick and order
 options — only enabled once there are 2+ captains and every team is named).
 
-During the draft: **Pause/Resume**, **Undo**, **Admin Pick**, **End Draft**, plus View Pool,
+During the draft: **Pause/Resume**, **Undo**, **Admin Pick**, **End Draft**, plus Participants,
 Add/Remove Players, Replace Captain and Rename Team.
 
 Server admins also get **Teardown**, which deletes every faction's team roles and channels.
 
 ### Captain panel
 Your team, your picks and your **queue** — **Add to Queue** (search, then choose), **Remove from
-Queue**, **Clear Queue** — plus **Name/Rename Team** and **View Pool**. Queued players are picked
+Queue**, **Clear Queue** — plus **Name/Rename Team** and **Participants**. Queued players are picked
 for you automatically when your turn starts.
 
 ### Everyone else
@@ -55,12 +55,34 @@ A read-only status view: who's on the clock, the captains and their teams, and t
 - **Restarts:** all state is in Postgres. After a redeploy, a running draft resumes and the
   current captain's clock restarts.
 
+## Attack competition
+
+Each faction's leaders set it up from `/draft`:
+
+- **🗓️ Competition Times** — start and end in TCT (`2026-10-25 18:00`). The start can't move once it's live.
+- **🔑 API Keys** — Limited keys from members with **Faction API Access**. Each key is checked
+  (valid, in this faction, can read faction attacks) and stored AES-encrypted; it's never shown again.
+  Add two or more so monitoring survives one being removed.
+
+While live, the bot reads `GET /v2/faction/attacksfull?filters=outgoing` every minute with the
+faction's keys (rotating), stores each attack once by its ID, and updates that faction's scoreboard
+message in the scoreboard channel. After a restart it catches up from where it stopped.
+
+**What counts:** results Attacked, Mugged, Hospitalized, Arrested, Looted, Special and Bounty; by a
+drafted player or captain (matched on the `[ID]` in their nickname, or their Torn ID for players not
+on Discord); defender not in one of the other family factions; attack ended inside the window.
+Stealthed attacks count. The scoreboard ranks teams and lists each team's top 10 hitters, and is
+marked **🏁 Final** two minutes after the end once the last hits are in.
+
+If every key fails, the leaders who added them get a DM. Teardown is blocked while a competition is live.
+
 ## Railway setup
 
 1. Add a **Postgres** service to the project.
 2. On the bot service, set these variables:
     - `DISCORD_TOKEN`
     - `TORN_API_KEY` — a public or limited key is enough
+    - `KEY_ENCRYPTION_SECRET` — any long random string; never change it once keys are stored
     - `PGHOST=${{Postgres.PGHOST}}`, `PGPORT=${{Postgres.PGPORT}}`, `PGDATABASE=${{Postgres.PGDATABASE}}`,
       `PGUSER=${{Postgres.PGUSER}}`, `PGPASSWORD=${{Postgres.PGPASSWORD}}`
 3. Deploy. The Dockerfile builds the jar. The table is created automatically on first start.

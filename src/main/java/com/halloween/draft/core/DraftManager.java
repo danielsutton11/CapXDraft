@@ -60,7 +60,7 @@ public class DraftManager {
 
     /** Lock-free copy of what autocomplete needs, refreshed on every save. */
     public record Snapshot(List<Player> eligible, List<Player> drafted, Set<Long> captains, DraftStatus status,
-                           List<Long> captainOrder, Map<Long, String> teamNames) {}
+                           List<Long> captainOrder, Map<Long, String> teamNames, Long compStart, Long compEnd) {}
 
     private final BotProperties props;
     private final StateRepository repo;
@@ -844,7 +844,7 @@ public class DraftManager {
     public record PanelInfo(Faction faction, boolean running, DraftStatus status, List<CaptainInfo> captains,
                             boolean poolPrepared, int poolSize, int poolOffDiscord, Long onClock,
                             Long deadlineMs, Long pausedRemainingMs, int timerSeconds, boolean autopick,
-                            int picksMade, boolean allTeamsNamed) {}
+                            int picksMade, boolean allTeamsNamed, int excluded) {}
 
     /** A captain's own view: their team, picks and queue. */
     public record CaptainView(Faction faction, String team, List<Player> picks, List<Player> queue,
@@ -876,7 +876,8 @@ public class DraftManager {
                     pool.size(), off, running ? d.currentCaptain() : null,
                     running ? d.turnDeadlineMs : null, running ? d.pausedRemainingMs : null,
                     d == null ? 0 : d.timerSeconds, d != null && d.autopick,
-                    d == null ? 0 : (int) d.picks.stream().filter(p -> !p.dropped).count(), allNamed);
+                    d == null ? 0 : (int) d.picks.stream().filter(p -> !p.dropped).count(), allNamed,
+                    s.excludedIds.size());
         });
     }
 
@@ -937,11 +938,110 @@ public class DraftManager {
     }
 
     // =====================================================================
+    // Competition hooks (used by CompetitionService and the panel)
+    // =====================================================================
+
+    /** A team for scoring: its name and every member's Torn ID (captain included). */
+    public record RosterMember(String display, Long tornId) {}
+    public record TeamRoster(long captainId, String teamName, List<RosterMember> members) {}
+
+    /** Teams from the faction's current/last draft, captain first. Empty when no draft exists. */
+    public List<TeamRoster> rosters(Faction f) {
+        return withLock(f.getKey(), () -> {
+            FactionState s = state(f);
+            Draft d = s.draft;
+            if (d == null) return List.of();
+            List<TeamRoster> out = new ArrayList<>();
+            for (Long cap : d.captainOrder) {
+                List<RosterMember> members = new ArrayList<>();
+                String capName = d.captainName(cap);
+                members.add(new RosterMember(capName, TornService.parseTornId(capName)));
+                d.picksFor(cap).stream().filter(p -> !p.dropped)
+                        .forEach(p -> members.add(new RosterMember(p.player.display, p.player.tornId)));
+                out.add(new TeamRoster(cap, s.teamName(cap, capName), members));
+            }
+            return out;
+        });
+    }
+
+    /** A copy of the faction's competition settings and progress. */
+    public com.halloween.draft.model.Competition competition(Faction f) {
+        return withLock(f.getKey(), () -> {
+            com.halloween.draft.model.Competition c = state(f).competition;
+            com.halloween.draft.model.Competition copy = new com.halloween.draft.model.Competition();
+            copy.startEpoch = c.startEpoch;
+            copy.endEpoch = c.endEpoch;
+            copy.lastFetchedEpoch = c.lastFetchedEpoch;
+            copy.lastCheckedMs = c.lastCheckedMs;
+            copy.lastError = c.lastError;
+            copy.scoreboardMessageId = c.scoreboardMessageId;
+            copy.finalPosted = c.finalPosted;
+            copy.keysFailingNotified = c.keysFailingNotified;
+            return copy;
+        });
+    }
+
+    /** Changes the faction's competition state under its lock and saves it. */
+    public void updateCompetition(Faction f, java.util.function.Consumer<com.halloween.draft.model.Competition> change) {
+        withLock(f.getKey(), () -> {
+            FactionState s = state(f);
+            change.accept(s.competition);
+            save(s);
+            return null;
+        });
+    }
+
+    /**
+     * Sets (or clears, with both null) the competition window. Times are epoch seconds UTC/TCT.
+     * The start can't be moved once the competition has begun.
+     */
+    public String setCompetitionTimes(Member invoker, String opt, long channelId, Long start, Long end) {
+        Faction f = resolveLeaderFaction(invoker, opt, channelId);
+        long now = System.currentTimeMillis() / 1000;
+        return withLock(f.getKey(), () -> {
+            FactionState s = state(f);
+            com.halloween.draft.model.Competition c = s.competition;
+            if (start == null && end == null) {
+                if (c.live(now)) throw new UserError("The competition is live — it can't be cleared now.");
+                s.competition = new com.halloween.draft.model.Competition();
+                s.competition.scoreboardMessageId = c.scoreboardMessageId;
+                save(s);
+                return "🗓️ Competition times cleared.";
+            }
+            if (start == null || end == null) throw new UserError("Give both a start and an end.");
+            if (end <= start) throw new UserError("The end has to be after the start.");
+            if (c.live(now) && !start.equals(c.startEpoch)) {
+                throw new UserError("The competition has already started — only the end time can change.");
+            }
+            if (!c.live(now) && end <= now) throw new UserError("That end time is already in the past.");
+            if (!start.equals(c.startEpoch)) c.lastFetchedEpoch = null; // new window: fetch from its start
+            c.startEpoch = start;
+            c.endEpoch = end;
+            if (end > now) c.finalPosted = false;
+            save(s);
+            return "🗓️ Competition set: **" + tct(start) + "** → **" + tct(end) + "** TCT.";
+        });
+    }
+
+    /** "25-10-2026 18:00" in TCT (UTC). */
+    public static String tct(long epoch) {
+        return java.time.format.DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm")
+                .withZone(java.time.ZoneOffset.UTC).format(java.time.Instant.ofEpochSecond(epoch));
+    }
+
+    // =====================================================================
     // Admin teardown (all factions)
     // =====================================================================
 
     public String checkTeardown(Member invoker) {
         if (!invoker.hasPermission(Permission.ADMINISTRATOR)) throw new UserError("Server admins only.");
+        long nowEpoch = System.currentTimeMillis() / 1000;
+        List<String> live = props.getFactions().stream().filter(f -> state(f).competition.live(nowEpoch))
+                .map(Faction::getName).toList();
+        if (!live.isEmpty()) {
+            throw new UserError("Competitions are live for: " + String.join(", ", live)
+                    + ". Teardown removes the teams they're scored on, so wait until they finish.");
+        }
         List<String> running = props.getFactions().stream().filter(f -> state(f).draftRunning()).map(Faction::getName).toList();
         if (!running.isEmpty()) {
             throw new UserError("These drafts are still running: " + String.join(", ", running) + ". End them first.");
@@ -963,6 +1063,7 @@ public class DraftManager {
                 s.pool = null;
                 s.excludedIds.clear();
                 s.excludedTornIds.clear();
+                s.competition = new com.halloween.draft.model.Competition(); // final scoreboards stay posted
                 if (clearCaptains) s.captains.clear();
                 save(s);
                 return n;
@@ -1326,7 +1427,8 @@ public class DraftManager {
                 d == null ? null : d.status,
                 List.copyOf(s.activeCaptains()),
                 s.teams.entrySet().stream().filter(e -> e.getValue().name != null && e.getValue().roleId != null)
-                        .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> e.getValue().name))));
+                        .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> e.getValue().name)),
+                s.competition.startEpoch, s.competition.endEpoch));
     }
 
     private <T> T withLock(String key, Supplier<T> work) {

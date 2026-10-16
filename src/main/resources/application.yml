@@ -18,6 +18,12 @@ draftbot:
   # Shown in the board title: "<Faction> <event-name> Draft <year>". Leave blank for "<Faction> Draft <year>".
   event-name: Halloween
 
+  # Channel holding one live attack scoreboard message per faction
+  scoreboard-channel-id: 1560776893635239998
+
+  # Encrypts stored faction API keys. Set once on Railway and never change it.
+  key-encryption-secret: ${KEY_ENCRYPTION_SECRET:}
+
   # Shared captain role, given/taken by /setcaptains and /replacecaptain
   captain-role-id: 1422656496088514632
 

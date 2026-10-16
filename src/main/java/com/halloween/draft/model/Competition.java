@@ -1,0 +1,29 @@
+package com.halloween.draft.model;
+
+/**
+ * A faction's attack competition window and monitoring progress. Times are epoch seconds (UTC,
+ * shown as TCT). Persisted with the rest of the faction's state.
+ */
+public class Competition {
+    public Long startEpoch;
+    public Long endEpoch;
+    /** Newest attack end-time fetched so far; the next poll starts a little before this. */
+    public Long lastFetchedEpoch;
+    public Long lastCheckedMs;
+    public String lastError;
+    public Long scoreboardMessageId;
+    public boolean finalPosted;
+    public boolean keysFailingNotified;
+
+    public boolean scheduled() {
+        return startEpoch != null && endEpoch != null;
+    }
+
+    public boolean live(long nowEpoch) {
+        return scheduled() && nowEpoch >= startEpoch && nowEpoch < endEpoch;
+    }
+
+    public boolean over(long nowEpoch) {
+        return scheduled() && nowEpoch >= endEpoch;
+    }
+}

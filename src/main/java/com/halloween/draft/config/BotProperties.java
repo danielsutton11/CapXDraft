@@ -15,6 +15,8 @@ public class BotProperties {
     private long teamCategoryId;
     private int maxQueue = 5;
     private String eventName = "";
+    private long scoreboardChannelId;
+    private String keyEncryptionSecret;
     private List<Long> teamChannelRoleIds = new ArrayList<>();
     private List<Faction> factions = new ArrayList<>();
 
@@ -56,6 +58,10 @@ public class BotProperties {
     public void setCaptainRoleId(long captainRoleId) { this.captainRoleId = captainRoleId; }
     public long getTeamCategoryId() { return teamCategoryId; }
     public void setTeamCategoryId(long teamCategoryId) { this.teamCategoryId = teamCategoryId; }
+    public long getScoreboardChannelId() { return scoreboardChannelId; }
+    public void setScoreboardChannelId(long scoreboardChannelId) { this.scoreboardChannelId = scoreboardChannelId; }
+    public String getKeyEncryptionSecret() { return keyEncryptionSecret; }
+    public void setKeyEncryptionSecret(String keyEncryptionSecret) { this.keyEncryptionSecret = keyEncryptionSecret; }
     public String getEventName() { return eventName; }
     public void setEventName(String eventName) { this.eventName = eventName; }
     public int getMaxQueue() { return maxQueue; }
