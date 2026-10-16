@@ -1,0 +1,57 @@
+spring:
+  main:
+    web-application-type: none
+  datasource:
+    # On Railway, reference the Postgres service's variables in this service:
+    # PGHOST=${{Postgres.PGHOST}} PGPORT=${{Postgres.PGPORT}} etc.
+    url: jdbc:postgresql://${PGHOST:localhost}:${PGPORT:5432}/${PGDATABASE:railway}
+    username: ${PGUSER:postgres}
+    password: ${PGPASSWORD:postgres}
+  sql:
+    init:
+      mode: always
+
+draftbot:
+  token: ${DISCORD_TOKEN:}
+  torn-api-key: ${TORN_API_KEY:}
+
+  # Shared captain role, given/taken by /setcaptains and /replacecaptain
+  captain-role-id: 1422656496088514632
+
+  # Category where team text + voice channels are created (all factions)
+  team-category-id: 1560730618751352873
+
+  # Max players a captain can queue
+  max-queue: 5
+
+  factions:
+    - key: capacity-x
+      name: Capacity X
+      draft-role-id: 1424430443570139167
+      leadership-role-id: 992535460524073031
+      channel-id: 1560731504152154293
+    - key: med-x
+      name: Med X
+      draft-role-id: 1560725343386472501
+      leadership-role-id: 1396532328100135015
+      channel-id: 1560731618312720455
+    - key: phoenix-x
+      name: Phoenix X
+      draft-role-id: 1560725290391445576
+      leadership-role-id: 1407409658561429615
+      channel-id: 1560731570518757527
+    - key: helvete-x
+      name: Helvete X
+      draft-role-id: 1560725502904508506
+      leadership-role-id: 1531425671539064975
+      channel-id: 1560731689636986990
+    - key: circle-x
+      name: Circle X
+      draft-role-id: 1560725531085774923
+      leadership-role-id: 1551662689309298770
+      channel-id: 1560731742267248721
+
+logging:
+  level:
+    root: INFO
+    net.dv8tion: INFO
