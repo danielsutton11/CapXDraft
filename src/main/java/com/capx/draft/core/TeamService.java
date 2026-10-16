@@ -80,8 +80,13 @@ public class TeamService {
                 .setName(captainRoleName(team.name))
                 .setColor(BoardRenderer.color(colorIndex))
                 .setMentionable(true)
+                .setHoisted(true) // "Display role members separately from online members"
                 .complete();
         team.captainRoleId = captainRole.getIdLong();
+        // New roles land at the bottom of the list - move them up under the bot's own role,
+        // team role first, then the captain role above it.
+        moveBelowBot(guild, role);
+        moveBelowBot(guild, captainRole);
         List<Role> extraRoles = props.getTeamChannelRoleIds().stream()
                 .map(guild::getRoleById).filter(java.util.Objects::nonNull).toList();
         Set<String> refused = new TreeSet<>();
@@ -138,6 +143,24 @@ public class TeamService {
             } catch (RuntimeException e) {
                 refused.add(p.getName() + " (" + who + ", " + container.getName() + ")");
             }
+        }
+    }
+
+    /** Moves a role to sit directly below the bot's highest role. Failure is logged, not fatal. */
+    private void moveBelowBot(Guild guild, Role role) {
+        try {
+            List<Role> botRoles = guild.getSelfMember().getRoles(); // highest first
+            if (botRoles.isEmpty()) return;
+            Role botTop = botRoles.get(0);
+            var order = guild.modifyRolePositions(); // ascending: index 0 = bottom of the list
+            List<Role> current = order.getCurrentOrder();
+            int botIdx = current.indexOf(botTop);
+            int roleIdx = current.indexOf(role);
+            if (botIdx < 0 || roleIdx < 0 || roleIdx == botIdx - 1) return;
+            // moveTo removes the role first, which shifts the bot role down one when ours was below it
+            order.selectPosition(role).moveTo(roleIdx < botIdx ? botIdx - 1 : botIdx).complete();
+        } catch (Exception e) {
+            log.warn("Couldn't move role {} under the bot's role: {}", role.getName(), e.getMessage());
         }
     }
 
