@@ -271,32 +271,47 @@ public class CompetitionService {
         teams.sort(Comparator.comparingInt(TeamScore::total).reversed());
         int total = teams.stream().mapToInt(TeamScore::total).sum();
 
-        StringBuilder sb = new StringBuilder();
-        if (c.finalPosted) sb.append("🏁 **Final results**\n");
-        else if (c.live(now)) sb.append("🔴 **Live** — ends <t:").append(c.endEpoch).append(":R>\n");
-        else if (now < c.startEpoch) sb.append("⏳ **Starts <t:").append(c.startEpoch).append(":R>**\n");
-        else sb.append("⏱️ **Finished** — counting the last hits…\n");
-        sb.append("🗓️ ").append(DraftManager.tct(c.startEpoch)).append(" → ").append(DraftManager.tct(c.endEpoch))
-                .append(" TCT\n\n");
-        if (teams.isEmpty()) {
-            sb.append("*No teams yet — they appear once the draft has run.*");
+        // Status heading and colour: green while live, orange before, grey while the last hits come in, gold when final.
+        String status;
+        int colour;
+        if (c.finalPosted) {
+            status = "### 🏁 Final results";
+            colour = 0xF1C40F;
+        } else if (c.live(now)) {
+            status = "### 🟢 Live now\nEnds <t:" + c.endEpoch + ":R>";
+            colour = 0x57F287;
+        } else if (now < c.startEpoch) {
+            status = "### ⏳ Starts <t:" + c.startEpoch + ":R>";
+            colour = 0xE67E22;
         } else {
-            sb.append("**").append(total).append("** successful hits so far\n\n");
-            for (int i = 0; i < teams.size(); i++) {
-                sb.append(i < MEDALS.length ? MEDALS[i] : "`" + (i + 1) + ".`").append(" **")
-                        .append(teams.get(i).name()).append("** — ").append(teams.get(i).total()).append('\n');
-            }
+            status = "### ⏱️ Finished\nCounting the last hits…";
+            colour = 0x95A5A6;
         }
 
-        String updated = c.lastCheckedMs == null ? "not checked yet"
-                : "updated " + DraftManager.tct(c.lastCheckedMs / 1000).substring(11) + " TCT";
-        List<MessageEmbed> embeds = new ArrayList<>();
-        embeds.add(new EmbedBuilder()
+        EmbedBuilder main = new EmbedBuilder()
                 .setTitle("🎃 " + f.getName() + " " + eventName() + "Competition")
-                .setDescription(sb.toString())
-                .setFooter("Successful outgoing hits by drafted players · family factions excluded · " + updated)
-                .setColor(0xE67E22)
-                .build());
+                .setDescription(status)
+                .setColor(colour)
+                .addField("Starts", DraftManager.tct(c.startEpoch) + " TCT", true)
+                .addField("Ends", DraftManager.tct(c.endEpoch) + " TCT", true);
+        if (teams.isEmpty()) {
+            main.addField("Teams", "*No teams yet — they appear once the draft has run.*", false);
+        } else {
+            main.addField("Total hits", "**" + total + "**", true);
+            StringBuilder standings = new StringBuilder();
+            for (int i = 0; i < teams.size(); i++) {
+                standings.append(i < MEDALS.length ? MEDALS[i] : "`" + (i + 1) + ".`").append(" **")
+                        .append(teams.get(i).name()).append("** · ").append(teams.get(i).total()).append('\n');
+            }
+            main.addField("Standings", standings.toString(), false);
+        }
+
+        String updated = c.lastCheckedMs == null ? "Not checked yet"
+                : "Updated " + DraftManager.tct(c.lastCheckedMs / 1000).substring(11) + " TCT";
+        main.setFooter("Successful outgoing hits by drafted players · family factions excluded\n" + updated);
+
+        List<MessageEmbed> embeds = new ArrayList<>();
+        embeds.add(main.build());
 
         for (int i = 0; i < teams.size() && embeds.size() < 10; i++) {
             TeamScore t = teams.get(i);
