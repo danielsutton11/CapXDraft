@@ -152,15 +152,28 @@ public class TeamService {
             List<Role> botRoles = guild.getSelfMember().getRoles(); // highest first
             if (botRoles.isEmpty()) return;
             Role botTop = botRoles.get(0);
-            var order = guild.modifyRolePositions(); // ascending: index 0 = bottom of the list
+            var order = guild.modifyRolePositions();
             List<Role> current = order.getCurrentOrder();
             int botIdx = current.indexOf(botTop);
             int roleIdx = current.indexOf(role);
-            if (botIdx < 0 || roleIdx < 0 || roleIdx == botIdx - 1) return;
-            // moveTo removes the role first, which shifts the bot role down one when ours was below it
-            order.selectPosition(role).moveTo(roleIdx < botIdx ? botIdx - 1 : botIdx).complete();
+            boolean ascending = order.isAscendingOrder(); // true: index 0 is the bottom of the list
+            log.info("Moving role {} (index {}) under bot role {} (index {}), ascending={}",
+                    role.getName(), roleIdx, botTop.getName(), botIdx, ascending);
+            if (botIdx < 0 || roleIdx < 0) return;
+
+            // moveTo removes the role and re-inserts it at the target index.
+            int target;
+            if (ascending) {
+                // below = one index lower; removing a lower role first shifts the bot role down one
+                target = roleIdx < botIdx ? botIdx - 1 : botIdx;
+            } else {
+                // below = one index higher; removing a later role doesn't shift the bot role
+                target = roleIdx > botIdx ? botIdx + 1 : botIdx;
+            }
+            if (target == roleIdx) return;
+            order.selectPosition(role).moveTo(target).complete();
         } catch (Exception e) {
-            log.warn("Couldn't move role {} under the bot's role: {}", role.getName(), e.getMessage());
+            log.warn("Couldn't move role {} under the bot's role: {}", role.getName(), e.toString());
         }
     }
 
