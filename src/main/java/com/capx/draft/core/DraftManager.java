@@ -59,7 +59,8 @@ public class DraftManager {
     public static final int MAX_CAPTAINS = 9; // header + 9 team embeds = Discord's 10-embed limit
 
     /** Lock-free copy of what autocomplete needs, refreshed on every save. */
-    public record Snapshot(List<Player> eligible, List<Player> drafted, Set<Long> captains, DraftStatus status) {}
+    public record Snapshot(List<Player> eligible, List<Player> drafted, Set<Long> captains, DraftStatus status,
+                           List<Long> captainOrder, Map<Long, String> teamNames) {}
 
     private final BotProperties props;
     private final StateRepository repo;
@@ -1232,7 +1233,10 @@ public class DraftManager {
                 List.copyOf(available),
                 d == null ? List.of() : d.picks.stream().filter(p -> !p.dropped).map(p -> p.player).toList(),
                 Set.copyOf(caps),
-                d == null ? null : d.status));
+                d == null ? null : d.status,
+                List.copyOf(s.activeCaptains()),
+                s.teams.entrySet().stream().filter(e -> e.getValue().name != null && e.getValue().roleId != null)
+                        .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> e.getValue().name))));
     }
 
     private <T> T withLock(String key, Supplier<T> work) {

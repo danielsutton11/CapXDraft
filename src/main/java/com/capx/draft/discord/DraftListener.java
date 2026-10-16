@@ -146,7 +146,7 @@ public class DraftListener extends ListenerAdapter {
             case "myqueue" -> drafts.queueShow(m, ch);
             case "cancelqueue" -> drafts.queueClear(m, ch);
             case "nameteam" -> drafts.nameTeam(g, m, ch, str(e, "name"),
-                    e.getOption("captain") == null ? null : member(e, "captain"));
+                    e.getOption("captain") == null ? null : captainOption(g, str(e, "captain")));
             case "draftstatus" -> drafts.status(m, faction, ch);
             case "viewcaptains" -> drafts.viewCaptains(g, m, faction, ch);
             case "remainingdraftees" -> drafts.remaining(m, faction, ch);
@@ -236,6 +236,10 @@ public class DraftListener extends ListenerAdapter {
 
     @Override
     public void onCommandAutoCompleteInteraction(CommandAutoCompleteInteractionEvent e) {
+        if (e.getName().equals("nameteam") && e.getFocusedOption().getName().equals("captain") && e.getMember() != null) {
+            captainChoices(e);
+            return;
+        }
         if (!e.getFocusedOption().getName().startsWith("player") || e.getMember() == null) {
             e.replyChoices(List.of()).queue();
             return;
@@ -271,6 +275,38 @@ public class DraftListener extends ListenerAdapter {
             if (label.length() > 100) label = label.substring(0, 100);
             out.add(new Command.Choice(label, String.valueOf(p.id)));
         }
+    }
+
+    /** /nameteam captain: only this faction's captains, with whether they've named a team yet. */
+    private void captainChoices(CommandAutoCompleteInteractionEvent e) {
+        BotProperties.Faction f = drafts.leaderFactionOrNull(e.getMember(), null, channelId(e.getChannel()));
+        DraftManager.Snapshot snap = f == null ? null : drafts.snapshot(f.getKey());
+        if (snap == null || e.getGuild() == null) {
+            e.replyChoices(List.of()).queue();
+            return;
+        }
+        String query = e.getFocusedOption().getValue().toLowerCase(Locale.ROOT);
+        List<Command.Choice> choices = new ArrayList<>();
+        for (Long id : snap.captainOrder()) {
+            Member m = e.getGuild().getMemberById(id);
+            String name = m == null ? String.valueOf(id) : m.getEffectiveName();
+            if (!query.isEmpty() && !name.toLowerCase(Locale.ROOT).contains(query)) continue;
+            String team = snap.teamNames().get(id);
+            String label = name + " — " + (team == null ? "no team yet" : "team: " + team);
+            if (label.length() > 100) label = label.substring(0, 100);
+            choices.add(new Command.Choice(label, String.valueOf(id)));
+            if (choices.size() >= 25) break;
+        }
+        e.replyChoices(choices).queue(null, err -> {});
+    }
+
+    private static Member captainOption(Guild g, String value) {
+        if (value == null || !value.matches("\\d{15,20}")) {
+            throw new UserError("Pick the captain from the suggestions.");
+        }
+        Member m = g.getMemberById(Long.parseLong(value));
+        if (m == null) throw new UserError("That captain isn't in the server any more.");
+        return m;
     }
 
     // ---------- option helpers ----------
