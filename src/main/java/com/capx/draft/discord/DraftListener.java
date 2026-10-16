@@ -7,6 +7,7 @@ import com.capx.draft.model.Player;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.MessageEmbed;
+import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.channel.Channel;
 import net.dv8tion.jda.api.events.guild.GuildReadyEvent;
 import net.dv8tion.jda.api.events.interaction.command.CommandAutoCompleteInteractionEvent;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Routes Discord events. Every command is acknowledged immediately (ephemeral) and then run on a
@@ -40,6 +42,12 @@ public class DraftListener extends ListenerAdapter {
     private final DraftManager drafts;
     private final BotProperties props;
     private final ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
+
+    // How long private replies stay before hiding themselves
+    private static final int ERROR_SECONDS = 20;
+    private static final int REPLY_SECONDS = 20;
+    private static final int VIEW_SECONDS = 90;     // /draftstatus, /remainingdraftees
+    private static final int CONFIRM_SECONDS = 60;  // unanswered Yes/No buttons
 
     /** A reply that needs Yes/No buttons. */
     private record Confirm(String text, Button yes, Button no) {}
@@ -78,12 +86,13 @@ public class DraftListener extends ListenerAdapter {
         workers.submit(() -> {
             try {
                 Object result = route(e);
-                respond(hook, result);
+                respond(hook, e.getUser(), result);
             } catch (UserError err) {
-                hook.editOriginal("❌ " + err.getMessage()).queue();
+                hook.editOriginal("❌ " + err.getMessage()).queue(ok -> autoHide(hook, ERROR_SECONDS));
             } catch (Exception ex) {
                 log.error("/{} failed", e.getName(), ex);
-                hook.editOriginal("⚠️ Something went wrong — the error has been logged.").queue();
+                hook.editOriginal("⚠️ Something went wrong — the error has been logged.")
+                        .queue(ok -> autoHide(hook, ERROR_SECONDS));
             }
         });
     }
@@ -142,16 +151,35 @@ public class DraftListener extends ListenerAdapter {
     }
 
     @SuppressWarnings("unchecked")
-    private void respond(InteractionHook hook, Object result) {
-        if (result instanceof Confirm c) {
-            hook.editOriginal(c.text()).setComponents(ActionRow.of(c.yes(), c.no())).queue();
+    private void respond(InteractionHook hook, User user, Object result) {
+        if (result instanceof String text) {
+            dmOrReply(hook, user, text);
+        } else if (result instanceof Confirm c) {
+            hook.editOriginal(c.text()).setComponents(ActionRow.of(c.yes(), c.no()))
+                    .queue(ok -> autoHide(hook, CONFIRM_SECONDS));
         } else if (result instanceof MessageEmbed embed) {
-            hook.editOriginalEmbeds(embed).queue();
+            hook.editOriginalEmbeds(embed).queue(ok -> autoHide(hook, VIEW_SECONDS));
         } else if (result instanceof List<?> list) {
-            hook.editOriginalEmbeds((List<MessageEmbed>) list).queue();
+            hook.editOriginalEmbeds((List<MessageEmbed>) list).queue(ok -> autoHide(hook, VIEW_SECONDS));
         } else {
-            hook.editOriginal(String.valueOf(result)).queue();
+            hook.editOriginal(String.valueOf(result)).queue(ok -> autoHide(hook, REPLY_SECONDS));
         }
+    }
+
+    /**
+     * Confirmations go to the user's DMs and the private "thinking" reply is removed, so the draft
+     * channel only ever shows the board. Falls back to the private reply if their DMs are closed.
+     */
+    private void dmOrReply(InteractionHook hook, User user, String text) {
+        user.openPrivateChannel()
+                .flatMap(pc -> pc.sendMessage(text))
+                .queue(ok -> hook.deleteOriginal().queue(null, err -> {}),
+                        err -> hook.editOriginal(text).setComponents().queue(ok -> autoHide(hook, REPLY_SECONDS)));
+    }
+
+    /** Removes a private reply after a delay so they don't pile up in the channel. */
+    private static void autoHide(InteractionHook hook, int seconds) {
+        hook.deleteOriginal().queueAfter(seconds, TimeUnit.SECONDS, null, err -> {});
     }
 
     // ---------- confirm buttons ----------
@@ -165,7 +193,7 @@ public class DraftListener extends ListenerAdapter {
             return;
         }
         if (parts[0].equals("cancel")) {
-            e.editMessage("Cancelled.").setComponents().queue();
+            e.editMessage("Cancelled.").setComponents().queue(ok -> autoHide(e.getHook(), 5));
             return;
         }
         e.deferEdit().queue();
@@ -184,7 +212,11 @@ public class DraftListener extends ListenerAdapter {
                 log.error("Button {} failed", e.getComponentId(), ex);
                 reply = "⚠️ Something went wrong — the error has been logged.";
             }
-            hook.editOriginal(reply).setComponents().queue();
+            if (reply.startsWith("❌") || reply.startsWith("⚠️")) {
+                hook.editOriginal(reply).setComponents().queue(ok -> autoHide(hook, ERROR_SECONDS));
+            } else {
+                dmOrReply(hook, e.getUser(), reply);
+            }
         });
     }
 

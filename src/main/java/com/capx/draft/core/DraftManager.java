@@ -105,7 +105,6 @@ public class DraftManager {
                     Guild g = guildFor(s.draft);
                     if (g == null) return null;
                     if (s.draft.status == DraftStatus.ACTIVE) {
-                        send(g, s.draft, "🔄 Bot restarted — the clock has been reset for the current pick.");
                         advance(f, s, g, null);
                     }
                     commit(f, s, g);
@@ -289,14 +288,14 @@ public class DraftManager {
             d.status = DraftStatus.ACTIVE;
             s.draft = d;
 
-            send(g, d, "🏁 **" + f.getName() + " draft started** by " + invoker.getAsMention() + " — "
-                    + pool.size() + " players, " + order.size() + " captains.\nOrder: "
-                    + order.stream().map(Member::getEffectiveName).collect(Collectors.joining(" → ")));
+            clearOwnMessages(channel); // previous boards, old pings - the new board is the only message
             refreshBoard(f, s, g);
             advance(f, s, g, null);
             commit(f, s, g);
             fetchStreaks(f, pool);
-            return "Draft started in " + channel.getAsMention() + ".";
+            return "🏁 " + f.getName() + " draft started in " + channel.getAsMention() + " — " + pool.size()
+                    + " players, " + order.size() + " captains.\nOrder: "
+                    + order.stream().map(Member::getEffectiveName).collect(Collectors.joining(" → "));
         });
     }
 
@@ -310,7 +309,7 @@ public class DraftManager {
             d.turnDeadlineMs = null;
             d.turnToken++;
             d.status = DraftStatus.PAUSED;
-            send(g, d, "⏸️ Draft paused by " + invoker.getAsMention() + ".");
+            dm(d.currentCaptain(), "⏸️ The " + f.getName() + " draft has been paused by leadership — your clock is frozen.");
             commit(f, s, g);
             return "Paused.";
         });
@@ -324,7 +323,6 @@ public class DraftManager {
             Long clock = d.pausedRemainingMs == null ? null : Math.max(d.pausedRemainingMs, 15_000);
             d.pausedRemainingMs = null;
             d.status = DraftStatus.ACTIVE;
-            send(g, d, "▶️ Draft resumed by " + invoker.getAsMention() + ".");
             advance(f, s, g, clock);
             commit(f, s, g);
             return "Resumed.";
@@ -340,11 +338,9 @@ public class DraftManager {
             Pick undone = d.undoLast().orElseThrow(() -> new UserError("There are no picks to undo."));
             if (!undone.dropped) teams.removeMember(g, s.teams.get(undone.captainId), undone.player.id);
 
-            send(g, d, "↩️ " + invoker.getAsMention() + " undid pick #" + undone.number + " (**"
-                    + undone.player.display + "**) — they're back in the pool.");
             advance(f, s, g, null);
             commit(f, s, g);
-            return "Undid pick #" + undone.number + ".";
+            return "↩️ Undid pick #" + undone.number + " (**" + undone.player.display + "**) — they're back in the pool.";
         });
     }
 
@@ -357,8 +353,7 @@ public class DraftManager {
             long captain = d.currentCaptain();
             Pick pick = d.recordPick(p, PickMethod.ADMIN);
             onPicked(s, g, pick);
-            send(g, d, "🛡️ " + invoker.getAsMention() + " picked **" + p.display + "** for "
-                    + s.teamName(captain, d.captainName(captain)) + " (pick #" + pick.number + ").");
+            dm(captain, "🛡️ Leadership picked **" + p.display + "** for your team (pick #" + pick.number + ").");
             advance(f, s, g, null);
             commit(f, s, g);
             return "Picked " + p.display + " for " + d.captainName(captain) + ".";
@@ -398,9 +393,10 @@ public class DraftManager {
             if (!isCaptainElsewhere(oldId, f.getKey())) teams.setCaptainRole(g, oldId, false);
             teams.setCaptainRole(g, newId, true);
 
+            dm(newId, "🔁 You're now a " + f.getName() + " captain"
+                    + (team != null ? " of **" + team.name + "**" : "") + ", replacing " + oldCap.getEffectiveName() + ".");
+            dm(oldId, "🔁 You've been replaced as a " + f.getName() + " captain by " + newCap.getEffectiveName() + ".");
             if (running) {
-                send(g, s.draft, "🔁 " + newCap.getAsMention() + " has replaced " + oldCap.getEffectiveName()
-                        + " as captain of " + s.teamName(newId, newCap.getEffectiveName()) + ".");
                 if (wasOnClock && s.draft.status == DraftStatus.ACTIVE) startClock(f, s, g, null, true);
                 commit(f, s, g);
             } else {
@@ -427,7 +423,6 @@ public class DraftManager {
             Player p = toPlayer(player);
             d.eligible.add(p);
             d.sortEligible();
-            send(g, d, "➕ **" + p.display + "** was added to the pool by " + invoker.getAsMention() + ".");
             if (d.status == DraftStatus.COMPLETE) {
                 d.status = DraftStatus.ACTIVE;
                 advance(f, s, g, null);
@@ -450,7 +445,6 @@ public class DraftManager {
                 Player p = inPool.get();
                 d.eligible.removeIf(x -> x.id == p.id);
                 d.removeFromAllQueues(p.id);
-                send(g, d, "➖ **" + p.display + "** was removed from the pool by " + invoker.getAsMention() + ".");
                 if (d.eligible.isEmpty() && d.status.running()) d.status = DraftStatus.COMPLETE;
                 advanceIfNeeded(f, s, g);
                 commit(f, s, g);
@@ -463,11 +457,9 @@ public class DraftManager {
             Pick pick = d.picks.stream().filter(pk -> !pk.dropped && pk.player.id == p.id).findFirst().orElseThrow();
             pick.dropped = true;
             teams.removeMember(g, s.teams.get(pick.captainId), p.id);
-            send(g, d, "➖ **" + p.display + "** was removed from "
-                    + s.teamName(pick.captainId, d.captainName(pick.captainId)) + " by " + invoker.getAsMention()
-                    + ". The pick slot stays used.");
             commit(f, s, g);
-            return p.display + " removed from their team.";
+            return p.display + " removed from " + s.teamName(pick.captainId, d.captainName(pick.captainId))
+                    + ". The pick slot stays used.";
         });
     }
 
@@ -488,7 +480,7 @@ public class DraftManager {
             d.turnDeadlineMs = null;
             d.turnToken++;
             deletePing(g, d);
-            send(g, d, "🛑 Draft ended early by " + invoker.getAsMention() + ". Teams so far are on the board.");
+            dmCaptains(d, "🛑 The " + f.getName() + " draft was ended early by leadership. Teams so far are on the board.");
             commit(f, s, g);
             return "The " + f.getName() + " draft has been ended.";
         });
@@ -602,12 +594,10 @@ public class DraftManager {
                     reply += "\n⚠️ Discord wouldn't let me grant: " + String.join("; ", refused)
                             + ". The channels work, but give my role those permissions if you want them included.";
                 }
-                announce(g, f, "🏷️ " + captain.getAsMention() + " named their team **" + name + "**.");
             } else {
                 String old = team.name;
                 teams.rename(g, f, team, name);
                 reply = "Renamed **" + old + "** to **" + name + "**.";
-                announce(g, f, "🏷️ " + captain.getAsMention() + " renamed **" + old + "** to **" + name + "**.");
             }
             commit(f, s, g);
             return reply;
@@ -712,6 +702,7 @@ public class DraftManager {
                 if (queued.isPresent()) {
                     Pick pick = d.recordPick(queued.get(), PickMethod.QUEUE);
                     onPicked(s, g, pick);
+                    dm(captain, "📋 Auto-picked **" + pick.player.display + "** from your queue (pick #" + pick.number + ").");
                     continue;
                 }
             }
@@ -769,12 +760,12 @@ public class DraftManager {
                         .orElseGet(() -> d.eligible.get(ThreadLocalRandom.current().nextInt(d.eligible.size())));
                 Pick pick = d.recordPick(p, PickMethod.TIMEOUT);
                 onPicked(s, g, pick);
-                send(g, d, "⏰ <@" + captain + "> ran out of time — auto-picked **" + p.display + "** (pick #" + pick.number + ").");
+                dm(captain, "⏰ You ran out of time — **" + p.display + "** was auto-picked for you (pick #" + pick.number + ").");
                 advance(f, s, g, null);
             } else {
                 d.turnDeadlineMs = null;
                 d.turnToken++;
-                send(g, d, "⏰ <@" + captain + ">, your time is up! You can still `/pick`, or leadership can `/adminpick` for you.");
+                dm(captain, "⏰ Your time is up! You can still `/pick`, or leadership can `/adminpick` for you.");
             }
             commit(f, s, g);
             return null;
@@ -787,7 +778,7 @@ public class DraftManager {
         d.turnDeadlineMs = null;
         d.turnToken++;
         deletePing(g, d);
-        send(g, d, "✅ **The " + f.getName() + " draft is complete!** Final teams are on the pinned board.");
+        dmCaptains(d, "✅ The " + f.getName() + " draft is complete! Final teams: " + boardLink(g, d));
     }
 
     private void onPicked(FactionState s, Guild g, Pick pick) {
@@ -798,24 +789,35 @@ public class DraftManager {
     // Discord output helpers
     // =====================================================================
 
+    /** Turn notification - by DM only, so the board stays the only message in the channel. */
     private void ping(Guild g, FactionState s, long captain) {
         Draft d = s.draft;
-        TextChannel ch = g.getTextChannelById(d.channelId);
-        if (ch == null) return;
-        deletePing(g, d);
+        deletePing(g, d); // clears any old-style channel ping
         int idx = d.nextPickIndex();
-        String clock = d.turnDeadlineMs != null ? " · time's up <t:" + d.turnDeadlineMs / 1000 + ":R>" : "";
+        String clock = d.turnDeadlineMs != null ? " — time's up <t:" + d.turnDeadlineMs / 1000 + ":R>" : "";
+        dm(captain, "🎯 **It's your pick** (#" + (idx + 1) + ")! Use `/pick` in <#" + d.channelId + ">"
+                + clock + ".\nDraft board: " + boardLink(g, d));
+    }
+
+    /** Deletes the bot's own recent messages in a channel. Other people's messages are left alone. */
+    private void clearOwnMessages(TextChannel ch) {
         try {
-            Message msg = ch.sendMessage("<@" + captain + ">, you're on the clock for pick #" + (idx + 1)
-                    + " — use `/pick`" + clock).complete();
-            d.lastPingMessageId = msg.getIdLong();
+            long self = ch.getGuild().getSelfMember().getIdLong();
+            List<Message> mine = ch.getHistory().retrievePast(100).complete().stream()
+                    .filter(m -> m.getAuthor().getIdLong() == self).toList();
+            mine.forEach(m -> m.delete().queue(null, e -> {}));
         } catch (Exception e) {
-            log.warn("Could not ping captain: {}", e.getMessage());
+            log.warn("Couldn't clear old bot messages in #{}: {}", ch.getName(), e.getMessage());
         }
-        String link = d.boardMessageId == null ? "<#" + d.channelId + ">"
+    }
+
+    private String boardLink(Guild g, Draft d) {
+        return d.boardMessageId == null ? "<#" + d.channelId + ">"
                 : "https://discord.com/channels/" + g.getId() + "/" + d.channelId + "/" + d.boardMessageId;
-        dm(captain, "🎯 It's your pick (#" + (idx + 1) + ") in the draft! Use `/pick` in <#" + d.channelId + ">"
-                + clock + ".\nDraft board: " + link);
+    }
+
+    private void dmCaptains(Draft d, String text) {
+        d.captainOrder.forEach(id -> dm(id, text));
     }
 
     private void deletePing(Guild g, Draft d) {
@@ -825,19 +827,9 @@ public class DraftManager {
         d.lastPingMessageId = null;
     }
 
-    private void send(Guild g, Draft d, String text) {
-        TextChannel ch = g.getTextChannelById(d.channelId);
-        if (ch != null) ch.sendMessage(text).queue(null, e -> log.warn("Send failed: {}", e.getMessage()));
-    }
-
-    private void announce(Guild g, Faction f, String text) {
-        TextChannel ch = g.getTextChannelById(f.getChannelId());
-        if (ch != null) ch.sendMessage(text).queue(null, e -> {});
-    }
-
-    private void dm(long userId, String text) {
+    private void dm(Long userId, String text) {
         JDA j = jda;
-        if (j == null) return;
+        if (j == null || userId == null) return;
         j.openPrivateChannelById(userId)
                 .flatMap(pc -> pc.sendMessage(text))
                 .queue(null, e -> log.debug("DM to {} failed: {}", userId, e.getMessage()));
@@ -866,8 +858,7 @@ public class DraftManager {
         }
         try {
             Message msg = ch.sendMessageEmbeds(embeds).complete();
-            d.boardMessageId = msg.getIdLong();
-            ch.pinMessageById(msg.getIdLong()).queue(null, e -> log.info("Couldn't pin board: {}", e.getMessage()));
+            d.boardMessageId = msg.getIdLong(); // not pinned: pinning posts a system message in the channel
         } catch (Exception e) {
             log.warn("Board post failed: {}", e.getMessage());
         }
