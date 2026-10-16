@@ -7,11 +7,10 @@ Stack: Java 21 · Spring Boot 3.3 · JDA 6 · Postgres (Railway).
 
 ## Commands
 
-There are only two:
+There's only one:
 
 - **`/draft`** opens your private draft panel (only you can see it; it closes itself after 14 minutes).
   The faction comes from the channel you're in, or pick one with the `faction` option.
-- **`/pick`** makes your pick, with live name suggestions.
 
 ### Leadership panel
 Panels use Discord's newer layout: one coloured box with section headings.
@@ -32,7 +31,8 @@ During the draft: Pause/Resume, Undo, Admin Pick at the top, then Participants, 
 Captain, Team Names), Competition (times and keys), and End Draft.
 
 ### Captain panel
-Your team, your picks and your **queue** — **Add to Queue** (search, then choose), **Remove from
+Where you are in the order (with the countdown), and **🎯 Pick Player** when you're on the clock
+(search, then choose). Your team, your picks and your **queue** — **Add to Queue** (search, then choose), **Remove from
 Queue**, **Clear Queue** — plus **Name/Rename Team** and **Participants**. Queued players are picked
 for you automatically when your turn starts.
 
@@ -49,14 +49,14 @@ A read-only status view: who's on the clock, the captains and their teams, and t
   seconds left, on auto-picks, admin picks, pause, replacement and when the draft ends.
 - **Timeout:** with `autopick`, it takes their first queued player, otherwise a random one.
   Without it, the captain is DM'd that time's up and the draft waits.
-- **Queues:** a captain with a queue is auto-picked the moment their turn starts. A manual `/pick`
+- **Queues:** a captain with a queue is auto-picked the moment their turn starts. A manual pick
   always beats the queue.
 - **Teams:** `/nameteam Alpha` creates an "Alpha" role, an "Alpha Captain" role (given only to that
   team's captain) and a text + voice channel in the team category. Only the team (plus any roles in
   `team-channel-role-ids`, empty by default) and the bot can see them. Players get the team role as
   they're picked; renaming updates both roles and the channels; Replace Captain moves the team's captain role.
 - **Torn streaks:** Torn IDs are read from nicknames like `Name [123456]`. Active streaks are
-  fetched in the background at draft start, cached, and shown in `/pick`, `/queue` and `/adminpick` suggestions.
+  fetched in the background at draft start, cached, and shown in the pick, queue and admin pick search results.
 - **Players not on Discord:** shown as "not on Discord" in suggestions, on the board and in
   `/remainingdraftees`. They can be picked like anyone else but get no roles, channels or DMs.
 - **Restarts:** all state is in Postgres. After a redeploy, a running draft resumes and the

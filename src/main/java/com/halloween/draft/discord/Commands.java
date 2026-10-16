@@ -14,16 +14,11 @@ public final class Commands {
 
     private Commands() {}
 
-    /**
-     * Everything else happens in the /draft panel (buttons, dropdowns and pop-up forms).
-     * /pick stays a command because typing with live suggestions is the quickest way to find
-     * one player in a big pool.
-     */
+    /** Everything else, picking included, happens in the /draft panel (buttons, dropdowns and pop-up forms). */
     public static List<CommandData> all(BotProperties props) {
         List<CommandData> list = new ArrayList<>();
         list.add(slash("draft", "Open the draft panel — controls for leaders, team & queue for captains")
                 .addOptions(faction(props)));
-        list.add(slash("pick", "Make your draft pick").addOptions(player("Start typing a name")));
         return list;
     }
 
@@ -36,9 +31,5 @@ public final class Commands {
                 "Faction (defaults to this channel's faction, or the one you lead)", false);
         props.getFactions().forEach(f -> o.addChoice(f.getName(), f.getKey()));
         return o;
-    }
-
-    private static OptionData player(String description) {
-        return new OptionData(OptionType.STRING, "player", description, true, true);
     }
 }

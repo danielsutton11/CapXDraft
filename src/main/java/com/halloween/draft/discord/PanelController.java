@@ -174,6 +174,7 @@ public class PanelController {
             case "rm" -> { e.replyModal(searchModal("mrmq:" + f.getKey(), "Remove players")).queue(); return; }
             case "apick" -> { e.replyModal(searchModal("mapq:" + f.getKey(), "Admin pick")).queue(); return; }
             case "qadd" -> { e.replyModal(searchModal("mqq:" + f.getKey(), "Add to your queue")).queue(); return; }
+            case "pk" -> { e.replyModal(searchModal("mpkq:" + f.getKey(), "Make your pick")).queue(); return; }
             case "ctimes" -> { e.replyModal(timesModal(f)).queue(); return; }
             case "keyadd" -> { e.replyModal(textModal("mkey:" + f.getKey(), "Add a faction API key",
                     "Limited key with Faction API Access", "16 letters and numbers", null, 16, 16)).queue(); return; }
@@ -270,6 +271,8 @@ public class PanelController {
             case "rmsel" -> home(g, m, f, drafts.removePlayers(g, m, f.getKey(), ch, values));
             case "apsel" -> home(g, m, f, drafts.adminPick(g, m, f.getKey(), ch, values.get(0)));
             case "qaddsel" -> captainHome(g, m, f, drafts.queueAdd(g, m, ch, values.get(0)));
+            // The faction's own channel, so a captain in two factions picks for the panel they're using.
+            case "pksel" -> captainHome(g, m, f, drafts.pick(g, m, f.getChannelId(), values.get(0)));
             case "qrmsel" -> captainHome(g, m, f, drafts.queueRemove(f, m.getIdLong(),
                     values.stream().map(Long::parseLong).toList()));
             case "sttimer" -> startView(f, Integer.parseInt(values.get(0)), a[2].equals("1"), a[3].equals("1"));
@@ -336,6 +339,7 @@ public class PanelController {
             case "mkey" -> keysView(f, competitions.addKey(m, f, text));
             case "mapq" -> resultsView(f, text, "apsel", "Choose the player to pick", false, 1);
             case "mqq" -> resultsView(f, text, "qaddsel", "Choose a player to queue", false, 1);
+            case "mpkq" -> resultsView(f, text, "pksel", "Choose your pick", false, 1);
             default -> home(g, m, f, "❌ Unknown action.");
         });
     }
@@ -491,6 +495,7 @@ public class PanelController {
         ui.heading("📍 Status");
         if (c.team() == null) ui.text("⚠️ **Your team needs a name** before the draft can start.");
         ui.text(c.running() ? turnLine(c) : "The draft hasn't started yet. Your queue and picks show here once it does.");
+        if (c.onClock() && !c.paused()) ui.buttons(Button.success(id("pk", f), "🎯 Pick Player"));
 
         if (c.running()) {
             // Queue first: it's what captains act on, and it stays put as the picks list grows.
@@ -498,7 +503,7 @@ public class PanelController {
             ui.text(c.queue().isEmpty()
                     ? "-# Empty. Queued players are picked for you automatically when your turn starts."
                     : numbered(c.queue()));
-            ui.buttons(c.queue().size() < 5 ? Button.primary(id("qadd", f), "➕ Queue Player") : null,
+            ui.buttons(c.queue().size() < 5 ? style(!c.onClock(), id("qadd", f), "➕ Queue Player") : null,
                     c.queue().isEmpty() ? null : Button.secondary(id("qrm", f), "➖ Unqueue"),
                     c.queue().isEmpty() ? null : Button.secondary(id("qclr", f), "🗑️ Clear"));
 
@@ -622,7 +627,7 @@ public class PanelController {
     /** Search results as a dropdown. {@code action} is the select's id, {@code max} how many can be ticked. */
     private View resultsView(Faction f, String query, String action, String placeholder, boolean includeDrafted, int max) {
         List<Player> found = drafts.search(f, query, includeDrafted);
-        String back = action.startsWith("q") ? id("my", f) : id("home", f);
+        String back = action.startsWith("q") || action.startsWith("pk") ? id("my", f) : id("home", f);
         if (found.isEmpty()) {
             return new Ui(BLURPLE)
                     .text("## 🔎 No matches")
@@ -732,7 +737,7 @@ public class PanelController {
             return c.onClock() ? "⏸️ **Draft paused** — you're on the clock when it resumes" + left
                     : "⏸️ **Draft paused** — <@" + c.clockCaptain() + "> is up next" + left;
         }
-        if (c.onClock()) return "🎯 **You're on the clock!** Use `/pick` — this is pick #" + c.nextPick() + timer;
+        if (c.onClock()) return "🎯 **You're on the clock!** This is pick #" + c.nextPick() + timer;
         if (c.picksAway() == null) return "✅ You've no picks left — there aren't enough players for another round.";
         String away = c.picksAway() == 1 ? "**You're next**" : "**" + c.picksAway() + " picks away**";
         return "⏳ " + away + " — your next pick is #" + c.nextPick()
@@ -776,7 +781,7 @@ public class PanelController {
                         .append(DraftManager.tct(st.end())).append(" TCT\n");
             }
             if (st.finalPosted()) sb.append("🏁 Finished — final scoreboard posted\n");
-            else if (st.live()) sb.append("🔴 **Live** — ends <t:").append(st.end()).append(":R>\n");
+            else if (st.live()) sb.append("🟢 **Live** — ends <t:").append(st.end()).append(":R>\n");
             else if (st.over()) sb.append("⏱️ Finished — collecting the last hits\n");
             else sb.append("⏳ Starts <t:").append(st.start()).append(":R>\n");
         }

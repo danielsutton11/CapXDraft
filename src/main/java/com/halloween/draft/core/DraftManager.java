@@ -1215,8 +1215,8 @@ public class DraftManager {
             Draft d = s.draft;
             if (d == null || d.status != DraftStatus.ACTIVE || d.turnToken != token || d.warningSent) return null;
             d.warningSent = true;
-            dm(d.currentCaptain(), "⏳ **30 seconds left** on your " + f.getName() + " draft pick! Use `/pick` in <#"
-                    + d.channelId + ">" + (d.autopick ? " or one will be made for you." : "."));
+            dm(d.currentCaptain(), "⏳ **30 seconds left** on your " + f.getName() + " draft pick! Run `/draft` in <#"
+                    + d.channelId + "> and press 🎯 **Pick Player**" + (d.autopick ? ", or one will be made for you." : "."));
             save(s);
             return null;
         });
@@ -1241,7 +1241,7 @@ public class DraftManager {
             } else {
                 d.turnDeadlineMs = null;
                 d.turnToken++;
-                dm(captain, "⏰ Your time is up! You can still `/pick`, or leadership can pick for you with 🛡️ Admin Pick.");
+                dm(captain, "⏰ Your time is up! You can still pick with 🎯 **Pick Player** in `/draft`, or leadership can pick for you with 🛡️ Admin Pick.");
             }
             commit(f, s, g);
             return null;
@@ -1271,7 +1271,7 @@ public class DraftManager {
         deletePing(g, d); // clears any old-style channel ping
         int idx = d.nextPickIndex();
         String clock = d.turnDeadlineMs != null ? " — time's up <t:" + d.turnDeadlineMs / 1000 + ":R>" : "";
-        dm(captain, "🎯 **It's your pick** (#" + (idx + 1) + ")! Use `/pick` in <#" + d.channelId + ">"
+        dm(captain, "🎯 **It's your pick** (#" + (idx + 1) + ")! Run `/draft` in <#" + d.channelId + "> and press 🎯 **Pick Player**"
                 + clock + ".\nDraft board: " + boardLink(g, d));
     }
 
