@@ -382,7 +382,8 @@ public class PanelController {
         ui.notice(notice);
 
         ui.divider().heading("📋 Setup — required, in order");
-        ui.text(check(captainsDone, next == 0, "Captains", p.captains().isEmpty() ? "none yet" : p.captains().size() + " set") + "\n"
+        ui.text(check(captainsDone, next == 0, "Captains", p.captains().isEmpty() ? "none yet"
+                : String.join(", ", p.captains().stream().map(c -> "<@" + c.id() + ">").toList())) + "\n"
                 + check(namesDone, next == 1, "Team names", p.captains().isEmpty() ? "after captains"
                 : named + " of " + p.captains().size()) + "\n"
                 + check(timesDone, next == 2, "Competition times", timesDone
