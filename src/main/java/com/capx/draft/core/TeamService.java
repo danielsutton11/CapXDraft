@@ -52,7 +52,7 @@ public class TeamService {
      * @return permissions Discord refused to grant (empty when everything went through)
      */
     public Set<String> create(Guild guild, BotProperties.Faction faction, Team team, int colorIndex,
-                              Collection<Long> memberIds) {
+                              long captainId, Collection<Long> memberIds) {
         Category category = guild.getCategoryById(props.getTeamCategoryId());
         if (category == null) {
             throw new UserError("I can't find the team category (" + props.getTeamCategoryId() + ").");
@@ -73,6 +73,12 @@ public class TeamService {
                 .setMentionable(true)
                 .complete();
         team.roleId = role.getIdLong();
+        Role captainRole = guild.createRole()
+                .setName(captainRoleName(team.name))
+                .setColor(BoardRenderer.color(colorIndex))
+                .setMentionable(true)
+                .complete();
+        team.captainRoleId = captainRole.getIdLong();
         List<Role> extraRoles = props.getTeamChannelRoleIds().stream()
                 .map(guild::getRoleById).filter(java.util.Objects::nonNull).toList();
         Set<String> refused = new TreeSet<>();
@@ -100,6 +106,7 @@ public class TeamService {
         for (Role r : extraRoles) grant(voice, r, only(VOICE_ALLOW, has), refused, r.getName());
 
         memberIds.forEach(id -> addMember(guild, team, id));
+        setTeamCaptain(guild, team, captainId, true);
         if (!refused.isEmpty()) log.warn("Team {}: Discord refused {}", team.name, refused);
         return refused;
     }
@@ -136,6 +143,8 @@ public class TeamService {
         team.name = newName;
         Role role = team.roleId == null ? null : guild.getRoleById(team.roleId);
         if (role != null) role.getManager().setName(newName).complete();
+        Role captainRole = team.captainRoleId == null ? null : guild.getRoleById(team.captainRoleId);
+        if (captainRole != null) captainRole.getManager().setName(captainRoleName(newName)).complete();
         TextChannel text = team.textChannelId == null ? null : guild.getTextChannelById(team.textChannelId);
         if (text != null) text.getManager().setName(textName(faction, newName)).complete();
         VoiceChannel voice = team.voiceChannelId == null ? null : guild.getVoiceChannelById(team.voiceChannelId);
@@ -151,6 +160,8 @@ public class TeamService {
             if (voice != null) voice.delete().complete();
             Role role = team.roleId == null ? null : guild.getRoleById(team.roleId);
             if (role != null) role.delete().complete();
+            Role captainRole = team.captainRoleId == null ? null : guild.getRoleById(team.captainRoleId);
+            if (captainRole != null) captainRole.delete().complete();
         } catch (Exception e) {
             log.warn("Problem deleting team {}: {}", team.name, e.getMessage());
         }
@@ -170,6 +181,16 @@ public class TeamService {
             guild.removeRoleFromMember(UserSnowflake.fromId(memberId), role)
                     .queue(null, e -> log.warn("Could not remove team role from {}: {}", memberId, e.getMessage()));
         }
+    }
+
+    /** Gives or takes the team's own "<name> Captain" role. */
+    public void setTeamCaptain(Guild guild, Team team, long memberId, boolean give) {
+        Role role = team == null || team.captainRoleId == null ? null : guild.getRoleById(team.captainRoleId);
+        if (role == null) return;
+        var action = give
+                ? guild.addRoleToMember(UserSnowflake.fromId(memberId), role)
+                : guild.removeRoleFromMember(UserSnowflake.fromId(memberId), role);
+        action.queue(null, e -> log.warn("Could not update team captain role for {}: {}", memberId, e.getMessage()));
     }
 
     public void setCaptainRole(Guild guild, long memberId, boolean give) {
@@ -199,6 +220,11 @@ public class TeamService {
 
     private static String names(Collection<Permission> perms) {
         return perms.stream().map(Permission::getName).collect(Collectors.joining(", "));
+    }
+
+    static String captainRoleName(String teamName) {
+        String name = teamName + " Captain";
+        return name.length() > 100 ? name.substring(0, 100) : name;
     }
 
     static String textName(BotProperties.Faction faction, String teamName) {

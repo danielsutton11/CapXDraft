@@ -4,6 +4,7 @@ package com.capx.draft.model;
 public class Team {
     public String name;
     public Long roleId;
+    public Long captainRoleId; // "<name> Captain", held only by this team's captain
     public Long textChannelId;
     public Long voiceChannelId;
 

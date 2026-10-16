@@ -392,6 +392,8 @@ public class DraftManager {
                 s.teams.put(newId, team);
                 teams.removeMember(g, team, oldId);
                 teams.addMember(g, team, newId);
+                teams.setTeamCaptain(g, team, oldId, false);
+                teams.setTeamCaptain(g, team, newId, true);
             }
             if (!isCaptainElsewhere(oldId, f.getKey())) teams.setCaptainRole(g, oldId, false);
             teams.setCaptainRole(g, newId, true);
@@ -584,7 +586,7 @@ public class DraftManager {
                 int colour = Math.max(0, s.activeCaptains().indexOf(me));
                 Set<String> refused;
                 try {
-                    refused = teams.create(g, f, team, colour, members);
+                    refused = teams.create(g, f, team, colour, me, members);
                 } catch (Exception e) {
                     log.error("Team creation failed for {}", name, e);
                     teams.delete(g, team);
@@ -593,7 +595,8 @@ public class DraftManager {
                     throw new UserError("I couldn't create the team role/channels (" + e.getMessage() + "). "
                             + "Check my role has Manage Roles and Manage Channels and sits above the team roles.");
                 }
-                reply = "Team **" + name + "** created with its own role, <#" + team.textChannelId + "> and a voice channel.";
+                reply = "Team **" + name + "** created: team role, **" + name + " Captain** role (yours), <#"
+                        + team.textChannelId + "> and a voice channel.";
                 if (!refused.isEmpty()) {
                     reply += "\n⚠️ Discord wouldn't let me grant: " + String.join("; ", refused)
                             + ". The channels work, but give my role those permissions if you want them included.";
