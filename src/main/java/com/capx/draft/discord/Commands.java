@@ -66,6 +66,7 @@ public final class Commands {
 
         // ---------- everyone ----------
         list.add(slash("draftstatus", "Who's on the clock, time left and who's next").addOptions(faction(props)));
+        list.add(slash("viewcaptains", "Show a faction's captains, pick order and team names").addOptions(faction(props)));
         list.add(slash("remainingdraftees", "Show everyone still in the pool").addOptions(faction(props)));
 
         // ---------- server admins ----------

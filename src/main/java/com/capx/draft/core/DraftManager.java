@@ -640,6 +640,37 @@ public class DraftManager {
         });
     }
 
+    public MessageEmbed viewCaptains(Guild g, Member m, String opt, long channelId) {
+        Faction f = resolveViewFaction(m, opt, channelId);
+        return withLock(f.getKey(), () -> {
+            FactionState s = state(f);
+            List<Long> caps = s.activeCaptains();
+            if (caps.isEmpty()) throw new UserError("No " + f.getName() + " captains set yet — leadership can add them with `/setcaptains`.");
+            StringBuilder sb = new StringBuilder();
+            int unnamed = 0;
+            for (int i = 0; i < caps.size(); i++) {
+                long id = caps.get(i);
+                Team t = s.teams.get(id);
+                boolean named = t != null && t.roleId != null;
+                if (!named) unnamed++;
+                sb.append("**").append(i + 1).append(".** <@").append(id).append("> — ")
+                        .append(named ? "**" + t.name + "**" : "⚠️ *team not named yet*");
+                if (s.draftRunning()) sb.append(" · ").append(s.draft.picksFor(id).stream().filter(p -> !p.dropped).count()).append(" picked");
+                sb.append('\n');
+            }
+            String footer = s.draftRunning()
+                    ? "Draft order · " + s.draft.status.name().toLowerCase()
+                    : unnamed == 0 ? "All teams named — ready for /startdraft"
+                    : unnamed + " team" + (unnamed == 1 ? "" : "s") + " still to be named before /startdraft";
+            return new EmbedBuilder()
+                    .setTitle("👑 " + f.getName() + " captains")
+                    .setDescription(sb.toString())
+                    .setFooter(footer)
+                    .setColor(0x5865F2)
+                    .build();
+        });
+    }
+
     public List<MessageEmbed> remaining(Member m, String opt, long channelId) {
         Faction f = resolveViewFaction(m, opt, channelId);
         return withLock(f.getKey(), () -> {

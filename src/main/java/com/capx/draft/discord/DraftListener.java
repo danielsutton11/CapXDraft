@@ -138,6 +138,7 @@ public class DraftListener extends ListenerAdapter {
             case "nameteam" -> drafts.nameTeam(g, m, ch, str(e, "name"),
                     e.getOption("captain") == null ? null : member(e, "captain"));
             case "draftstatus" -> drafts.status(m, faction, ch);
+            case "viewcaptains" -> drafts.viewCaptains(g, m, faction, ch);
             case "remainingdraftees" -> drafts.remaining(m, faction, ch);
             case "teardownteams" -> {
                 boolean clear = bool(e, "clear_captains", true);
