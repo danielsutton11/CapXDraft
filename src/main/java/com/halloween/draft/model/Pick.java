@@ -1,4 +1,4 @@
-package com.capx.draft.model;
+package com.halloween.draft.model;
 
 public class Pick {
     public int number;      // 1-based overall pick number

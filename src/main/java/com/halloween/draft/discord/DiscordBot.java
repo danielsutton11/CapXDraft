@@ -1,7 +1,7 @@
-package com.capx.draft.discord;
+package com.halloween.draft.discord;
 
-import com.capx.draft.config.BotProperties;
-import com.capx.draft.core.DraftManager;
+import com.halloween.draft.config.BotProperties;
+import com.halloween.draft.core.DraftManager;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.entities.Activity;

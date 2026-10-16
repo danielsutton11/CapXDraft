@@ -1,4 +1,4 @@
-package com.capx.draft.model;
+package com.halloween.draft.model;
 
 import org.junit.jupiter.api.Test;
 

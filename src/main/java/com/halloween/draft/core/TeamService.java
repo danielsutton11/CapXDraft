@@ -1,7 +1,7 @@
-package com.capx.draft.core;
+package com.halloween.draft.core;
 
-import com.capx.draft.config.BotProperties;
-import com.capx.draft.model.Team;
+import com.halloween.draft.config.BotProperties;
+import com.halloween.draft.model.Team;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.IPermissionHolder;

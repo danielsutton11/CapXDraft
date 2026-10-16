@@ -1,4 +1,4 @@
-package com.capx.draft.config;
+package com.halloween.draft.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 

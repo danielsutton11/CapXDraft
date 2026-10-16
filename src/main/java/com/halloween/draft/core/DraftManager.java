@@ -1,14 +1,14 @@
-package com.capx.draft.core;
+package com.halloween.draft.core;
 
-import com.capx.draft.config.BotProperties;
-import com.capx.draft.config.BotProperties.Faction;
-import com.capx.draft.model.Draft;
-import com.capx.draft.model.DraftStatus;
-import com.capx.draft.model.FactionState;
-import com.capx.draft.model.Pick;
-import com.capx.draft.model.PickMethod;
-import com.capx.draft.model.Player;
-import com.capx.draft.model.Team;
+import com.halloween.draft.config.BotProperties;
+import com.halloween.draft.config.BotProperties.Faction;
+import com.halloween.draft.model.Draft;
+import com.halloween.draft.model.DraftStatus;
+import com.halloween.draft.model.FactionState;
+import com.halloween.draft.model.Pick;
+import com.halloween.draft.model.PickMethod;
+import com.halloween.draft.model.Player;
+import com.halloween.draft.model.Team;
 import jakarta.annotation.PostConstruct;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.Permission;
@@ -844,6 +844,108 @@ public class DraftManager {
             }
             return embeds;
         });
+    }
+
+    // =====================================================================
+    // Panel data (read-only views for the /draft panels)
+    // =====================================================================
+
+    public record CaptainInfo(long id, String name, String team, int picks) {}
+
+    /** Everything the main panel shows. {@code status} is null when no draft has been run since teardown. */
+    public record PanelInfo(Faction faction, boolean running, DraftStatus status, List<CaptainInfo> captains,
+                            boolean poolPrepared, int poolSize, int poolOffDiscord, Long onClock,
+                            Long deadlineMs, Long pausedRemainingMs, int timerSeconds, boolean autopick,
+                            int picksMade, boolean allTeamsNamed) {}
+
+    /** A captain's own view: their team, picks and queue. */
+    public record CaptainView(Faction faction, String team, List<Player> picks, List<Player> queue,
+                              boolean running, boolean onClock) {}
+
+    public Faction faction(String key) {
+        return props.faction(key).orElseThrow(() -> new UserError("Unknown faction."));
+    }
+
+    public PanelInfo panelInfo(Guild g, Faction f) {
+        return withLock(f.getKey(), () -> {
+            FactionState s = state(f);
+            Draft d = s.draft;
+            boolean running = s.draftRunning();
+            List<CaptainInfo> caps = new ArrayList<>();
+            boolean allNamed = !s.activeCaptains().isEmpty();
+            for (Long id : s.activeCaptains()) {
+                Member m = g.getMemberById(id);
+                String name = running ? d.captainName(id) : (m != null ? m.getEffectiveName() : String.valueOf(id));
+                Team t = s.teams.get(id);
+                String team = t != null && t.roleId != null ? t.name : null;
+                if (team == null) allNamed = false;
+                int picks = running ? (int) d.picksFor(id).stream().filter(p -> !p.dropped).count() : 0;
+                caps.add(new CaptainInfo(id, name, team, picks));
+            }
+            List<Player> pool = running ? d.eligible : s.pool != null ? s.pool : List.of();
+            int off = (int) pool.stream().filter(p -> !p.onDiscord()).count();
+            return new PanelInfo(f, running, d == null ? null : d.status, caps, running || s.pool != null,
+                    pool.size(), off, running ? d.currentCaptain() : null,
+                    running ? d.turnDeadlineMs : null, running ? d.pausedRemainingMs : null,
+                    d == null ? 0 : d.timerSeconds, d != null && d.autopick,
+                    d == null ? 0 : (int) d.picks.stream().filter(p -> !p.dropped).count(), allNamed);
+        });
+    }
+
+    public CaptainView captainView(Faction f, long captainId) {
+        return withLock(f.getKey(), () -> {
+            FactionState s = state(f);
+            Team t = s.teams.get(captainId);
+            String team = t != null && t.roleId != null ? t.name : null;
+            if (!s.draftRunning()) return new CaptainView(f, team, List.of(), List.of(), false, false);
+            Draft d = s.draft;
+            d.firstQueued(captainId); // drops anyone already taken
+            List<Player> queue = d.queueFor(captainId).stream().map(d::findEligible)
+                    .flatMap(Optional::stream).toList();
+            List<Player> picks = d.picksFor(captainId).stream().filter(p -> !p.dropped).map(p -> p.player).toList();
+            return new CaptainView(f, team, picks, queue, true, Objects.equals(d.currentCaptain(), captainId));
+        });
+    }
+
+    public String queueRemove(Faction f, long captainId, List<Long> playerIds) {
+        return withLock(f.getKey(), () -> {
+            FactionState s = state(f);
+            Draft d = requireRunning(s, f);
+            if (!d.captainOrder.contains(captainId)) throw new UserError("You're not a captain in this draft.");
+            List<Long> q = d.queueFor(captainId);
+            int before = q.size();
+            q.removeAll(playerIds);
+            save(s);
+            int removed = before - q.size();
+            return "➖ Removed " + removed + " player" + (removed == 1 ? "" : "s") + " from your queue.";
+        });
+    }
+
+    /**
+     * Name search over the pool (prepared pool before the draft, remaining players during it),
+     * optionally including drafted players. Lock-free, from the snapshot. Max 25 results.
+     */
+    public List<Player> search(Faction f, String query, boolean includeDrafted) {
+        Snapshot snap = snapshots.get(f.getKey());
+        if (snap == null) return List.of();
+        String q = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        List<Player> out = new ArrayList<>();
+        List<Player> source = new ArrayList<>(snap.eligible());
+        if (includeDrafted) source.addAll(snap.drafted());
+        for (Player p : source) {
+            if (q.isEmpty() || p.display.toLowerCase(Locale.ROOT).contains(q)
+                    || (p.tornId != null && String.valueOf(p.tornId).equals(q))) {
+                out.add(p);
+                if (out.size() >= 25) break;
+            }
+        }
+        return out;
+    }
+
+    /** The pool as the panels show it: prepared pool before the draft, remaining players during it. */
+    public List<Player> poolList(Faction f) {
+        Snapshot snap = snapshots.get(f.getKey());
+        return snap == null ? List.of() : snap.eligible();
     }
 
     // =====================================================================

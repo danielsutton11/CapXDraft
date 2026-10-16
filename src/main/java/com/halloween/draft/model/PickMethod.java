@@ -1,4 +1,4 @@
-package com.capx.draft.model;
+package com.halloween.draft.model;
 
 public enum PickMethod {
     MANUAL("picked"),

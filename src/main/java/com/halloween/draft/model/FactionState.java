@@ -1,4 +1,4 @@
-package com.capx.draft.model;
+package com.halloween.draft.model;
 
 import java.util.ArrayList;
 import java.util.HashMap;

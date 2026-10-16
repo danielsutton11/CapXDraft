@@ -1,10 +1,10 @@
-package com.capx.draft.core;
+package com.halloween.draft.core;
 
-import com.capx.draft.config.BotProperties;
-import com.capx.draft.model.Draft;
-import com.capx.draft.model.FactionState;
-import com.capx.draft.model.Pick;
-import com.capx.draft.model.Team;
+import com.halloween.draft.config.BotProperties;
+import com.halloween.draft.model.Draft;
+import com.halloween.draft.model.FactionState;
+import com.halloween.draft.model.Pick;
+import com.halloween.draft.model.Team;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.entities.MessageEmbed;
 import org.springframework.stereotype.Component;

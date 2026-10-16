@@ -1,4 +1,4 @@
-package com.capx.draft.model;
+package com.halloween.draft.model;
 
 /** A captain's named team, with the Discord role and channels created for it. */
 public class Team {

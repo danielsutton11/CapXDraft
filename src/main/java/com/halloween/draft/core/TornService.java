@@ -1,6 +1,6 @@
-package com.capx.draft.core;
+package com.halloween.draft.core;
 
-import com.capx.draft.config.BotProperties;
+import com.halloween.draft.config.BotProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;

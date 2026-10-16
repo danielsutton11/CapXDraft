@@ -1,4 +1,4 @@
-package com.capx.draft.model;
+package com.halloween.draft.model;
 
 /**
  * A draftable player. Discord members use their Discord id; faction members who aren't on Discord

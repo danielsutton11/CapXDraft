@@ -1,6 +1,6 @@
-package com.capx.draft.core;
+package com.halloween.draft.core;
 
-import com.capx.draft.model.FactionState;
+import com.halloween.draft.model.FactionState;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;

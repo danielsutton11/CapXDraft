@@ -7,43 +7,51 @@ Stack: Java 21 · Spring Boot 3.3 · JDA 5 · Postgres (Railway).
 
 ## Commands
 
-**Leadership** (the faction's leadership role, or server admins). `faction` is optional: it
-defaults to the draft channel you're in, or the one faction you lead.
+There are only two:
 
-| Command | What it does |
-|---|---|
-| `/setcaptains captain1..captain9 [random]` | Sets captains in pick order and gives them the captain role |
-| `/startdraft [timer] [autopick] [random_order]` | Pulls everyone with the faction's draft role into the pool and starts |
-| `/pause` · `/resume` | Freezes the clock; resume keeps the time that was left (min 15s) |
-| `/undo` | Reverts the last pick, puts the player back and gives that captain the turn again |
-| `/adminpick player` | Picks for whoever is on the clock |
-| `/replacecaptain old new` | Swaps a captain — new one inherits team, queue, role and turn |
-| `/addplayer member` · `/removeplayer player` | Late joiners and dropouts (removing a drafted player keeps the slot used) |
-| `/enddraft` | Ends early, with a confirm button |
+- **`/draft`** opens your private draft panel (only you can see it; it closes itself after 14 minutes).
+  The faction comes from the channel you're in, or pick one with the `faction` option.
+- **`/pick`** makes your pick, with live name suggestions.
 
-**Captains:** `/pick`, `/queue` (up to 5), `/myqueue`, `/cancelqueue`, `/nameteam name`.
+### Leadership panel
+Before the draft: **Set Captains** (also builds the pool), **Name Team** (for any captain),
+**Replace Captain**, **View Pool**, **Add Player** (Discord member or Torn ID), **Remove Players**
+(search, then tick up to 25), **Rebuild Pool**, and **Start Draft** (timer, auto-pick and order
+options — only enabled once there are 2+ captains and every team is named).
 
-**Everyone:** `/draftstatus`, `/remainingdraftees`.
+During the draft: **Pause/Resume**, **Undo**, **Admin Pick**, **End Draft**, plus View Pool,
+Add/Remove Players, Replace Captain and Rename Team.
 
-**Server admins:** `/teardownteams [clear_captains]` — deletes every faction's team roles and
-channels, and by default removes the captain role from everyone. Refuses while any draft is running.
+Server admins also get **Teardown**, which deletes every faction's team roles and channels.
+
+### Captain panel
+Your team, your picks and your **queue** — **Add to Queue** (search, then choose), **Remove from
+Queue**, **Clear Queue** — plus **Name/Rename Team** and **View Pool**. Queued players are picked
+for you automatically when your turn starts.
+
+### Everyone else
+A read-only status view: who's on the clock, the captains and their teams, and the pool.
 
 ## How it behaves
 
-- **Live board:** one pinned message per faction, edited after every change. It shows who's on
+- **Live board:** the only message the bot posts in each draft channel, edited after every change. It shows who's on
   the clock with a live countdown, the next three picks, the last pick and every team. If someone
   deletes it, the bot posts a new one.
-- **Turns:** the captain gets a channel ping and a DM. The previous ping is deleted, so the channel
-  stays clean. There's a DM warning at 30 seconds left.
+- **DMs, not channel messages:** command confirmations go to whoever ran the command by DM (falling
+  back to a private reply if their DMs are closed). Captains are DM'd when it's their turn, at 30
+  seconds left, on auto-picks, admin picks, pause, replacement and when the draft ends.
 - **Timeout:** with `autopick`, it takes their first queued player, otherwise a random one.
-  Without it, the bot announces time's up and waits.
+  Without it, the captain is DM'd that time's up and the draft waits.
 - **Queues:** a captain with a queue is auto-picked the moment their turn starts. A manual `/pick`
   always beats the queue.
-- **Teams:** `/nameteam` creates a role with the team name, plus a text and a voice channel in the
-  team category. Only that team, the faction's leadership and the bot can see them. Players get the
-  role as they're picked; renaming updates the role and channels.
+- **Teams:** `/nameteam Alpha` creates an "Alpha" role, an "Alpha Captain" role (given only to that
+  team's captain) and a text + voice channel in the team category. Only the team (plus any roles in
+  `team-channel-role-ids`, empty by default) and the bot can see them. Players get the team role as
+  they're picked; renaming updates both roles and the channels; `/replacecaptain` moves the captain role.
 - **Torn streaks:** Torn IDs are read from nicknames like `Name [123456]`. Active streaks are
-  fetched in the background at draft start, cached, and shown in `/pick` suggestions and on the board.
+  fetched in the background at draft start, cached, and shown in `/pick`, `/queue` and `/adminpick` suggestions.
+- **Players not on Discord:** shown as "not on Discord" in suggestions, on the board and in
+  `/remainingdraftees`. They can be picked like anyone else but get no roles, channels or DMs.
 - **Restarts:** all state is in Postgres. After a redeploy, a running draft resumes and the
   current captain's clock restarts.
 
@@ -51,10 +59,10 @@ channels, and by default removes the captain role from everyone. Refuses while a
 
 1. Add a **Postgres** service to the project.
 2. On the bot service, set these variables:
-   - `DISCORD_TOKEN`
-   - `TORN_API_KEY` — a public or limited key is enough
-   - `PGHOST=${{Postgres.PGHOST}}`, `PGPORT=${{Postgres.PGPORT}}`, `PGDATABASE=${{Postgres.PGDATABASE}}`,
-     `PGUSER=${{Postgres.PGUSER}}`, `PGPASSWORD=${{Postgres.PGPASSWORD}}`
+    - `DISCORD_TOKEN`
+    - `TORN_API_KEY` — a public or limited key is enough
+    - `PGHOST=${{Postgres.PGHOST}}`, `PGPORT=${{Postgres.PGPORT}}`, `PGDATABASE=${{Postgres.PGDATABASE}}`,
+      `PGUSER=${{Postgres.PGUSER}}`, `PGPASSWORD=${{Postgres.PGPASSWORD}}`
 3. Deploy. The Dockerfile builds the jar. The table is created automatically on first start.
 
 There's no web port, so leave the healthcheck off.
@@ -62,7 +70,7 @@ There's no web port, so leave the healthcheck off.
 ## Discord setup
 
 - **Server Members Intent** must be enabled in the developer portal. The old bot already used it.
-- **Bot permissions:** Manage Roles, Manage Channels, Manage Messages (to pin the board), View
+- **Bot permissions:** Manage Roles, Manage Channels, Manage Messages, View
   Channels, Send Messages, Embed Links, Connect.
 - **Role order:** the bot's role must sit **above** the captain role. Team roles it creates are
   placed under its own role automatically.
