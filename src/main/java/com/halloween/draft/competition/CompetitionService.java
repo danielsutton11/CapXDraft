@@ -298,12 +298,25 @@ public class CompetitionService {
             main.addField("Teams", "*No teams yet — they appear once the draft has run.*", false);
         } else {
             main.addField("Total hits", "**" + total + "**", true);
-            StringBuilder standings = new StringBuilder();
+            // One column per team, ranked, each with its top hitters.
             for (int i = 0; i < teams.size(); i++) {
-                standings.append(i < MEDALS.length ? MEDALS[i] : "`" + (i + 1) + ".`").append(" **")
-                        .append(teams.get(i).name()).append("** · ").append(teams.get(i).total()).append('\n');
+                TeamScore t = teams.get(i);
+                StringBuilder body = new StringBuilder();
+                int shown = 0;
+                for (Hitter h : t.hitters()) {
+                    if (shown >= TOP_HITTERS) break;
+                    body.append('`').append(++shown).append("` ").append(h.name())
+                            .append(" · **").append(h.hits()).append("**\n");
+                }
+                int rest = t.hitters().size() - shown;
+                if (rest > 0) {
+                    int restHits = t.hitters().stream().skip(shown).mapToInt(Hitter::hits).sum();
+                    body.append("*+").append(rest).append(" more · ").append(restHits).append("*");
+                }
+                String rank = i < MEDALS.length ? MEDALS[i] : "`" + (i + 1) + ".`";
+                main.addField(rank + " " + t.name() + " · " + t.total() + (t.total() == 1 ? " hit" : " hits"),
+                        body.length() == 0 ? "*No members*" : body.toString(), true);
             }
-            main.addField("Standings", standings.toString(), false);
         }
 
         String updated = c.lastCheckedMs == null ? "Not checked yet"
@@ -313,26 +326,6 @@ public class CompetitionService {
         List<MessageEmbed> embeds = new ArrayList<>();
         embeds.add(main.build());
 
-        for (int i = 0; i < teams.size() && embeds.size() < 10; i++) {
-            TeamScore t = teams.get(i);
-            StringBuilder body = new StringBuilder();
-            int shown = 0;
-            for (Hitter h : t.hitters()) {
-                if (shown >= TOP_HITTERS) break;
-                body.append('`').append(String.format("%2d", ++shown)).append("` ").append(h.name())
-                        .append(" — **").append(h.hits()).append("**\n");
-            }
-            int rest = t.hitters().size() - shown;
-            if (rest > 0) {
-                int restHits = t.hitters().stream().skip(shown).mapToInt(Hitter::hits).sum();
-                body.append("*+").append(rest).append(" more: ").append(restHits).append(" hits*");
-            }
-            embeds.add(new EmbedBuilder()
-                    .setTitle((i < MEDALS.length ? MEDALS[i] + " " : "") + t.name() + " — " + t.total() + " hits")
-                    .setDescription(body.length() == 0 ? "*No members*" : body.toString())
-                    .setColor(BoardRenderer.color(i))
-                    .build());
-        }
         return embeds;
     }
 
