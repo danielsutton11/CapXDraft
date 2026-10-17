@@ -95,7 +95,8 @@ A read-only status view: who's on the clock, the captains and their teams, and t
   join as "not on Discord" players (no roles, channels or DMs, but draftable). Draft-role members who
   aren't in the Torn faction are left out and listed, since their hits can't be tracked; ➕ Add brings
   them in anyway. If Torn can't be reached, the list is just the draft-role members.
-- **Torn streaks:** active streaks are fetched in the background and shown in search results.
+- **Torn streaks:** active streaks are fetched when someone joins the participant list, and refreshed
+  once a day at 00:15 TCT for everyone still available to pick. They're shown in search results.
 - **Restarts:** all state is in Postgres. After a redeploy, a running draft resumes and the
   current captain's clock restarts.
 - **Failed actions roll back:** if an action fails partway, the faction goes back to its last saved

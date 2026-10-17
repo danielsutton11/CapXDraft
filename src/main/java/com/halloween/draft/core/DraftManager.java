@@ -144,6 +144,39 @@ public class DraftManager {
         }
         // If the board or launcher gets deleted (by hand, a purge bot...), put it back within a few minutes.
         timers.every(5 * 60_000, 5 * 60_000, this::healDraftChannels);
+        // Streaks change at Torn's day reset, so refresh them once a day just after it (00:15 TCT).
+        timers.every(msUntilNextTct(0, 15), 24 * 60 * 60_000L, this::refreshAllStreaks);
+    }
+
+    /** Milliseconds until the next hh:mm TCT (UTC). */
+    static long msUntilNextTct(int hour, int minute) {
+        java.time.ZonedDateTime now = java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC);
+        java.time.ZonedDateTime next = now.withHour(hour).withMinute(minute).withSecond(0).withNano(0);
+        if (!next.isAfter(now)) next = next.plusDays(1);
+        return java.time.Duration.between(now, next).toMillis();
+    }
+
+    /**
+     * Daily: fetches fresh active streaks for everyone who can still be picked — the participant
+     * list before a draft, the remaining players during one. Drafted players keep what they had.
+     */
+    void refreshAllStreaks() {
+        for (Faction f : props.getFactions()) {
+            if (broken.contains(f.getKey())) continue;
+            try {
+                List<Player> players = withLock(f.getKey(), () -> {
+                    FactionState s = state(f);
+                    if (s.draftRunning()) return List.copyOf(s.draft.eligible);
+                    return s.pool == null ? List.<Player>of() : List.copyOf(s.pool);
+                });
+                if (!players.isEmpty()) {
+                    log.info("{}: daily streak refresh for {} players", f.getName(), players.size());
+                    fetchStreaks(f, players);
+                }
+            } catch (Exception e) {
+                log.warn("{}: daily streak refresh failed: {}", f.getName(), e.getMessage());
+            }
+        }
     }
 
     /**
