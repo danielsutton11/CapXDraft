@@ -4,11 +4,10 @@ import com.halloween.draft.competition.CompetitionRepository.ApiKey;
 import com.halloween.draft.competition.CompetitionRepository.AttackRow;
 import com.halloween.draft.config.BotProperties;
 import com.halloween.draft.config.BotProperties.Faction;
-import com.halloween.draft.core.BoardRenderer;
 import com.halloween.draft.core.DraftManager;
 import com.halloween.draft.core.DraftManager.RosterMember;
 import com.halloween.draft.core.DraftManager.TeamRoster;
-import com.halloween.draft.core.TimerService;
+import com.halloween.draft.core.TornService;
 import com.halloween.draft.core.UserError;
 import com.halloween.draft.model.Competition;
 import net.dv8tion.jda.api.EmbedBuilder;
@@ -31,6 +30,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -38,7 +41,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * outgoing attacks with the faction's keys, store them, and refresh that faction's scoreboard.
  *
  * Counting rules: successful results only, by drafted players (matched on Torn ID), excluding hits
- * on the other family factions, with the attack's end time inside the window.
+ * on any of the five family factions (the scoring faction included), with the attack's end time
+ * inside the window.
+ *
+ * Runs on its own thread so slow Torn calls can never hold up the draft's pick timers.
  */
 @Service
 public class CompetitionService {
@@ -50,44 +56,71 @@ public class CompetitionService {
     /** Keys needed before a draft can start, so monitoring survives one key failing. */
     public static final int MIN_KEYS = 2;
     private static final long POLL_MS = 60_000;
+    private static final long KEY_CHECK_MS = 60 * 60_000;
+    private static final long MEMBER_CHECK_SECONDS = 15 * 60;
     private static final long OVERLAP_SECONDS = 600; // re-read 10 minutes to catch long fights
+    private static final long DRAFT_WARN_SECONDS = 30 * 60;
     private static final int TOP_HITTERS = 10;
     private static final String[] MEDALS = {"🥇", "🥈", "🥉"};
 
     /** For the panel: everything about a faction's competition at a glance. */
     public record Status(Long start, Long end, boolean live, boolean over, boolean finalPosted, int keys,
-                         int keysWorking, Long lastCheckedMs, String lastError, int missingTornIds) {}
+                         int keysWorking, Long lastCheckedMs, String lastError, int missingTornIds,
+                         List<String> leftFaction) {}
 
     private final BotProperties props;
     private final DraftManager drafts;
     private final CompetitionRepository repo;
     private final TornAttackClient torn;
+    private final TornService tornService;
     private final KeyCrypto crypto;
-    private final TimerService timers;
-    private final BoardRenderer board;
     private final AtomicInteger rotation = new AtomicInteger();
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "competition");
+        t.setDaemon(true);
+        return t;
+    });
+    /** One scoreboard update at a time per faction, so two can never post a message each. */
+    private final Map<String, Object> scoreboardLocks = new ConcurrentHashMap<>();
+    /** Drafted Torn IDs no longer in the Torn faction, per faction, from the last member check. */
+    private final Map<String, Set<Long>> leftFaction = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastMemberCheck = new ConcurrentHashMap<>();
     private volatile JDA jda;
 
     public CompetitionService(BotProperties props, DraftManager drafts, CompetitionRepository repo,
-                              TornAttackClient torn, KeyCrypto crypto, TimerService timers, BoardRenderer board) {
+                              TornAttackClient torn, TornService tornService, KeyCrypto crypto) {
         this.props = props;
         this.drafts = drafts;
         this.repo = repo;
         this.torn = torn;
+        this.tornService = tornService;
         this.crypto = crypto;
-        this.timers = timers;
-        this.board = board;
     }
 
-    /** Starts the once-a-minute loop. Called when the bot has connected. */
+    /** Starts the once-a-minute loop and the hourly key check. Called when the bot has connected. */
     public void start(JDA jda) {
         this.jda = jda;
-        timers.every(15_000, POLL_MS, this::tick);
+        scheduler.scheduleWithFixedDelay(() -> guard("Competition tick", this::tick), 15_000, POLL_MS, TimeUnit.MILLISECONDS);
+        scheduler.scheduleWithFixedDelay(() -> guard("Key check", this::checkKeys), 5 * 60_000, KEY_CHECK_MS, TimeUnit.MILLISECONDS);
         log.info("Competition monitor running (every {}s)", POLL_MS / 1000);
+    }
+
+    private static void guard(String what, Runnable r) {
+        try {
+            r.run();
+        } catch (Exception e) {
+            log.error("{} failed", what, e);
+        }
+    }
+
+    /** Torn faction IDs whose members can't be counted as targets: all five, the scoring faction included. */
+    public static List<Long> familyFactionIds(BotProperties props) {
+        return props.getFactions().stream().map(Faction::getTornFactionId).filter(id -> id > 0).distinct().toList();
     }
 
     void tick() {
         for (Faction f : props.getFactions()) {
+            if (drafts.isBroken(f)) continue;
             try {
                 tick(f);
             } catch (Exception e) {
@@ -98,11 +131,16 @@ public class CompetitionService {
 
     private void tick(Faction f) {
         Competition c = drafts.competition(f);
-        if (!c.scheduled() || c.finalPosted) return;
+        if (!c.scheduled()) {
+            if (c.scoreboardMessageId != null) refreshScoreboard(f); // times were cleared: remove the old scoreboard
+            return;
+        }
+        if (c.finalPosted) return;
         long now = Instant.now().getEpochSecond();
         warnIfDraftOverruns(f, c, now);
 
         if (c.live(now) || c.over(now)) {
+            checkMembership(f, now);
             long to = Math.min(now, c.endEpoch);
             // Attacks are filtered on start time, so look back a little: a fight that started just
             // before the window (or the last check) can end inside it. Repeats are ignored on save.
@@ -122,8 +160,6 @@ public class CompetitionService {
         refreshScoreboard(f);
     }
 
-    private static final long DRAFT_WARN_SECONDS = 30 * 60;
-
     /**
      * DMs the faction's leaders if its draft is still running 30 minutes before the competition
      * starts, and again when it starts: hits count for whoever is on a team, so players picked
@@ -138,8 +174,9 @@ public class CompetitionService {
         if (c.live(now) && !c.draftLiveWarned) {
             text = "🚨 **" + f.getName() + ":** the competition started at " + DraftManager.tct(c.startEpoch)
                     + " TCT but the draft is still running (" + snap.eligible().size() + " players left). "
-                    + "Anyone picked from now on brings their hits since the start with them. "
-                    + "Finish the draft quickly, or use `/draft` → 🛑 End Draft.";
+                    + "Anyone picked from now on brings their hits since the start with them. Undo, add, remove, "
+                    + "admin pick and replace captain are now locked. Finish the draft quickly, or use "
+                    + "`/draft` → 🛑 End Draft.";
             drafts.updateCompetition(f, x -> { x.draftLiveWarned = true; x.draftSoonWarned = true; });
         } else if (!c.live(now) && c.startEpoch - now <= DRAFT_WARN_SECONDS && !c.draftSoonWarned) {
             text = "⏰ **" + f.getName() + ":** the competition starts <t:" + c.startEpoch + ":R> ("
@@ -167,19 +204,48 @@ public class CompetitionService {
                 m.getUser().openPrivateChannel().flatMap(pc -> pc.sendMessage(text)).queue(null, e -> {}));
     }
 
+    /**
+     * Every 15 minutes during the competition: which drafted players are no longer in the Torn
+     * faction? Their hits stop appearing in the faction's attack log, so they're flagged.
+     */
+    private void checkMembership(Faction f, long now) {
+        Long last = lastMemberCheck.get(f.getKey());
+        if (last != null && now - last < MEMBER_CHECK_SECONDS) return;
+        lastMemberCheck.put(f.getKey(), now);
+        if (f.getTornFactionId() <= 0) return;
+        try {
+            Set<Long> members = tornService.fetchFactionMembers(f.getTornFactionId()).keySet();
+            Set<Long> left = new HashSet<>();
+            for (TeamRoster t : drafts.rosters(f)) {
+                for (RosterMember m : t.members()) {
+                    if (m.tornId() != null && !members.contains(m.tornId())) left.add(m.tornId());
+                }
+            }
+            leftFaction.put(f.getKey(), Set.copyOf(left));
+        } catch (Exception e) {
+            log.warn("{}: couldn't check faction membership: {}", f.getName(), e.getMessage());
+        }
+    }
+
     /** Fetches with the faction's keys in turn until one works. Returns false if none did. */
     private boolean fetch(Faction f, long from, long to) {
-        List<ApiKey> keys = repo.keys(f.getKey());
-        if (keys.isEmpty()) {
-            failed(f, "No API keys added — add one under 🔑 API Keys.", keys);
+        List<ApiKey> all = repo.keys(f.getKey());
+        if (all.isEmpty()) {
+            failed(f, "No API keys added — add one under 🔑 API Keys.", all);
             return false;
         }
-        int startAt = Math.floorMod(rotation.getAndIncrement(), keys.size());
+        // Keys without a known problem first, rotating between them; flagged keys only as a last resort.
+        List<ApiKey> good = all.stream().filter(k -> k.lastError() == null).toList();
+        List<ApiKey> flagged = all.stream().filter(k -> k.lastError() != null).toList();
+        List<ApiKey> order = new ArrayList<>();
+        int startAt = good.isEmpty() ? 0 : Math.floorMod(rotation.getAndIncrement(), good.size());
+        for (int i = 0; i < good.size(); i++) order.add(good.get((startAt + i) % good.size()));
+        order.addAll(flagged);
+
         String lastProblem = null;
-        for (int i = 0; i < keys.size(); i++) {
-            ApiKey k = keys.get((startAt + i) % keys.size());
+        for (ApiKey k : order) {
             try {
-                List<AttackRow> rows = torn.outgoing(crypto.decrypt(k.encryptedKey()), from, to);
+                List<AttackRow> rows = torn.outgoing(crypto.decrypt(k.encryptedKey()), f.getTornFactionId(), from, to);
                 repo.saveAttacks(f.getKey(), rows);
                 repo.markKeyOk(k.id());
                 log.debug("{}: {} attacks fetched with {}'s key", f.getName(), rows.size(), k.ownerName());
@@ -192,7 +258,7 @@ public class CompetitionService {
                 log.warn("{}: fetch with {}'s key failed: {}", f.getName(), k.ownerName(), e.getMessage());
             }
         }
-        failed(f, lastProblem, keys);
+        failed(f, lastProblem, all);
         return false;
     }
 
@@ -212,6 +278,36 @@ public class CompetitionService {
         notify.forEach(id -> jda.openPrivateChannelById(id).flatMap(pc -> pc.sendMessage(text)).queue(null, e -> {}));
     }
 
+    /** Hourly: is every stored key still working, and does its owner still belong to the faction? */
+    void checkKeys() {
+        for (Faction f : props.getFactions()) {
+            if (drafts.isBroken(f) || f.getTornFactionId() <= 0) continue;
+            for (ApiKey k : repo.keys(f.getKey())) {
+                try {
+                    TornAttackClient.KeyOwner owner = torn.owner(crypto.decrypt(k.encryptedKey()));
+                    if (owner.factionId() != f.getTornFactionId()) {
+                        repo.markKeyError(k.id(), owner.name() + " has left " + f.getName()
+                                + " — remove this key and add a current member's key");
+                        log.info("{}: {}'s key flagged, owner is no longer in the faction", f.getName(), owner.name());
+                    }
+                } catch (TornAttackClient.KeyProblem e) {
+                    repo.markKeyError(k.id(), e.getMessage());
+                } catch (Exception e) {
+                    log.warn("{}: key check for {} failed: {}", f.getName(), k.ownerName(), e.getMessage());
+                }
+                sleep(1_000);
+            }
+        }
+    }
+
+    private static void sleep(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     // =====================================================================
     // Keys (leader panel)
     // =====================================================================
@@ -227,7 +323,7 @@ public class CompetitionService {
             throw new UserError(secret == null || secret.isBlank()
                     ? "KEY_ENCRYPTION_SECRET isn't set on the server, so keys can't be stored safely."
                     : "KEY_ENCRYPTION_SECRET is too short (" + secret.length()
-                    + " characters) — it needs at least 16, so keys can't be stored safely.");
+                      + " characters) — it needs at least 16, so keys can't be stored safely.");
         }
         if (f.getTornFactionId() <= 0) throw new UserError("No Torn faction ID is configured for " + f.getName() + ".");
         TornAttackClient.KeyOwner owner = torn.verify(rawKey.trim(), f.getTornFactionId(), f.getName());
@@ -254,54 +350,69 @@ public class CompetitionService {
         long now = Instant.now().getEpochSecond();
         List<ApiKey> keys = repo.keys(f.getKey());
         int working = (int) keys.stream().filter(k -> k.lastError() == null).count();
-        int missing = (int) drafts.rosters(f).stream().flatMap(t -> t.members().stream())
+        List<TeamRoster> rosters = drafts.rosters(f);
+        int missing = (int) rosters.stream().flatMap(t -> t.members().stream())
                 .filter(m -> m.tornId() == null).count();
+        Set<Long> left = leftFaction.getOrDefault(f.getKey(), Set.of());
+        List<String> leftNames = rosters.stream().flatMap(t -> t.members().stream())
+                .filter(m -> m.tornId() != null && left.contains(m.tornId())).map(RosterMember::display).toList();
         return new Status(c.startEpoch, c.endEpoch, c.live(now), c.over(now), c.finalPosted, keys.size(), working,
-                c.lastCheckedMs, c.lastError, missing);
+                c.lastCheckedMs, c.lastError, missing, leftNames);
     }
 
     // =====================================================================
     // Scoreboard
     // =====================================================================
 
-    /** Posts or edits the faction's scoreboard message. Safe to call any time. */
+    /**
+     * Posts, edits or (when the times have been cleared) deletes the faction's scoreboard message.
+     * Safe to call any time; calls for the same faction run one after another.
+     */
     public void refreshScoreboard(Faction f) {
-        JDA j = jda;
-        if (j == null) return;
-        Competition c = drafts.competition(f);
-        if (!c.scheduled()) return;
-        TextChannel ch = j.getTextChannelById(props.getScoreboardChannelId());
-        if (ch == null) {
-            log.warn("Scoreboard channel {} not found", props.getScoreboardChannelId());
-            return;
-        }
-        List<MessageEmbed> embeds = render(f, c);
-        if (c.scoreboardMessageId != null) {
-            try {
-                ch.editMessageEmbedsById(c.scoreboardMessageId, embeds).complete();
+        synchronized (scoreboardLocks.computeIfAbsent(f.getKey(), k -> new Object())) {
+            JDA j = jda;
+            if (j == null || drafts.isBroken(f)) return;
+            Competition c = drafts.competition(f);
+            TextChannel ch = j.getTextChannelById(props.getScoreboardChannelId());
+            if (ch == null) {
+                log.warn("Scoreboard channel {} not found", props.getScoreboardChannelId());
                 return;
-            } catch (ErrorResponseException e) {
-                if (e.getErrorResponse() != ErrorResponse.UNKNOWN_MESSAGE) {
-                    log.warn("Scoreboard edit failed: {}", e.getMessage());
+            }
+            if (!c.scheduled()) {
+                if (c.scoreboardMessageId != null) {
+                    ch.deleteMessageById(c.scoreboardMessageId).queue(null, e -> {});
+                    drafts.updateCompetition(f, x -> x.scoreboardMessageId = null);
+                }
+                return;
+            }
+            List<MessageEmbed> embeds = render(f, c);
+            if (c.scoreboardMessageId != null) {
+                try {
+                    ch.editMessageEmbedsById(c.scoreboardMessageId, embeds).complete();
                     return;
+                } catch (ErrorResponseException e) {
+                    if (e.getErrorResponse() != ErrorResponse.UNKNOWN_MESSAGE) {
+                        log.warn("Scoreboard edit failed: {}", e.getMessage());
+                        return;
+                    }
                 }
             }
-        }
-        try {
-            Message msg = ch.sendMessageEmbeds(embeds).complete();
-            drafts.updateCompetition(f, x -> x.scoreboardMessageId = msg.getIdLong());
-        } catch (Exception e) {
-            log.warn("Scoreboard post failed: {}", e.getMessage());
+            try {
+                Message msg = ch.sendMessageEmbeds(embeds).complete();
+                drafts.updateCompetition(f, x -> x.scoreboardMessageId = msg.getIdLong());
+            } catch (Exception e) {
+                log.warn("Scoreboard post failed: {}", e.getMessage());
+            }
         }
     }
 
-    private record Hitter(String name, int hits) {}
+    private record Hitter(String name, int hits, boolean left) {}
     private record TeamScore(String name, int total, List<Hitter> hitters) {}
 
     private List<MessageEmbed> render(Faction f, Competition c) {
         long now = Instant.now().getEpochSecond();
-        List<Long> family = props.getFactions().stream().map(Faction::getTornFactionId)
-                .filter(id -> id > 0 && id != f.getTornFactionId()).toList();
+        List<Long> family = familyFactionIds(props);
+        Set<Long> left = leftFaction.getOrDefault(f.getKey(), Set.of());
         Map<Long, Integer> hits = c.startEpoch == null ? Map.of()
                 : repo.hitsByAttacker(f.getKey(), c.startEpoch, c.endEpoch, COUNTED, family);
 
@@ -310,7 +421,7 @@ public class CompetitionService {
             List<Hitter> hitters = new ArrayList<>();
             for (RosterMember m : t.members()) {
                 int n = m.tornId() == null ? 0 : hits.getOrDefault(m.tornId(), 0);
-                hitters.add(new Hitter(m.display(), n));
+                hitters.add(new Hitter(m.display(), n, m.tornId() != null && left.contains(m.tornId())));
             }
             hitters.sort(Comparator.comparingInt(Hitter::hits).reversed().thenComparing(Hitter::name));
             teams.add(new TeamScore(t.teamName(), hitters.stream().mapToInt(Hitter::hits).sum(), hitters));
@@ -353,7 +464,7 @@ public class CompetitionService {
                 for (Hitter h : t.hitters()) {
                     if (shown >= TOP_HITTERS) break;
                     body.append('`').append(++shown).append("` ").append(h.name())
-                            .append(" · **").append(h.hits()).append("**\n");
+                            .append(h.left() ? " *(left faction)*" : "").append(" · **").append(h.hits()).append("**\n");
                 }
                 int rest = t.hitters().size() - shown;
                 if (rest > 0) {

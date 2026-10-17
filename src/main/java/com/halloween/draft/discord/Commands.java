@@ -28,7 +28,7 @@ public final class Commands {
 
     private static OptionData faction(BotProperties props) {
         OptionData o = new OptionData(OptionType.STRING, "faction",
-                "Faction (defaults to this channel's faction, or the one you lead)", false);
+                "Admins only: open another faction's panel (everyone else gets this channel's faction)", false);
         props.getFactions().forEach(f -> o.addChoice(f.getName(), f.getKey()));
         return o;
     }

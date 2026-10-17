@@ -35,6 +35,19 @@ public class FactionState {
         return draft != null && draft.status.running();
     }
 
+    /**
+     * A draft has finished or been ended and its teams haven't been cleaned up. A new draft needs
+     * Clean Up first, so old team roles and members don't carry over.
+     */
+    public boolean needsCleanUp() {
+        return draft != null && !draft.status.running();
+    }
+
+    /** Rosters are fixed while the competition is live: hits are scored on whoever is on each team. */
+    public boolean rostersLocked(long nowEpoch) {
+        return competition != null && competition.live(nowEpoch);
+    }
+
     /** Captains relevant right now: the live draft's order if one is running, else the configured list. */
     public List<Long> activeCaptains() {
         return draftRunning() ? draft.captainOrder : captains;

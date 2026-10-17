@@ -75,35 +75,59 @@ public class TornAttackClient {
     }
 
     /**
-     * Outgoing attacks for the key owner's faction that started between {@code from} and {@code to}
+     * Outgoing attacks for {@code factionId} that started between {@code from} and {@code to}
      * (epoch seconds), oldest first, following pages until everything is fetched.
+     * @throws KeyProblem if the key returns another faction's attacks (its owner has moved faction)
      */
-    public List<AttackRow> outgoing(String key, long from, long to) {
+    public List<AttackRow> outgoing(String key, long factionId, long from, long to) {
         List<AttackRow> out = new ArrayList<>();
         long cursor = from;
         for (int page = 0; page < 50; page++) {
             JsonNode root = get(V2 + "/faction/attacksfull?filters=outgoing&sort=ASC&limit=" + PAGE
                     + "&from=" + cursor + "&to=" + to, key);
-            JsonNode attacks = root.path("attacks");
-            int count = 0;
-            long newest = cursor;
-            for (JsonNode a : attacks) {
-                count++;
-                long started = a.path("started").asLong();
-                newest = Math.max(newest, started);
-                out.add(new AttackRow(
-                        a.path("id").asLong(),
-                        nullableLong(a.path("attacker").path("id")),
-                        nullableLong(a.path("defender").path("id")),
-                        nullableLong(a.path("defender").path("faction_id")),
-                        a.path("result").asText("None"),
-                        started,
-                        a.path("ended").asLong(started)));
-            }
-            if (count < PAGE || newest <= cursor) break; // last page (or no progress - stop rather than loop)
-            cursor = newest;                              // overlap by one second; duplicates are ignored on save
+            List<AttackRow> rows = parseAttacks(root, factionId);
+            out.addAll(rows);
+            long newest = rows.stream().mapToLong(AttackRow::started).max().orElse(cursor);
+            if (rows.size() < PAGE || newest <= cursor) break; // last page (or no progress - stop rather than loop)
+            cursor = newest;                                   // overlap by one second; duplicates are ignored on save
         }
         return out;
+    }
+
+    /**
+     * Reads one page of attacksfull. Every outgoing attack names the attacker's faction; if any
+     * belongs to a different faction, the key's owner has moved and the key is no use to us.
+     */
+    static List<AttackRow> parseAttacks(JsonNode root, long factionId) {
+        List<AttackRow> out = new ArrayList<>();
+        for (JsonNode a : root.path("attacks")) {
+            Long attackerFaction = nullableLong(a.path("attacker").path("faction_id"));
+            if (attackerFaction != null && attackerFaction != 0 && attackerFaction != factionId) {
+                throw new KeyProblem("it now returns another faction's attacks (faction " + attackerFaction
+                        + ") — its owner has probably left. Remove it and add a current member's key");
+            }
+            long started = a.path("started").asLong();
+            out.add(new AttackRow(
+                    a.path("id").asLong(),
+                    nullableLong(a.path("attacker").path("id")),
+                    nullableLong(a.path("defender").path("id")),
+                    nullableLong(a.path("defender").path("faction_id")),
+                    a.path("result").asText("None"),
+                    started,
+                    a.path("ended").asLong(started)));
+        }
+        return out;
+    }
+
+    /**
+     * The key's owner and their current faction, for the hourly check that keys still belong to
+     * someone in the faction.
+     * @throws KeyProblem if Torn rejects the key
+     */
+    public KeyOwner owner(String key) {
+        JsonNode user = get("https://api.torn.com/user/?selections=basic,profile", key);
+        return new KeyOwner(user.path("player_id").asLong(), user.path("name").asText("Unknown"),
+                user.path("faction").path("faction_id").asLong(0));
     }
 
     private JsonNode get(String url, String key) {

@@ -71,13 +71,13 @@ public class TeamService {
         }
 
         Role role = guild.createRole()
-                .setName(team.name)
+                .setName(roleName(faction, team.name))
                 .setColor(BoardRenderer.color(colorIndex))
                 .setMentionable(true)
                 .complete();
         team.roleId = role.getIdLong();
         Role captainRole = guild.createRole()
-                .setName(captainRoleName(team.name))
+                .setName(captainRoleName(faction, team.name))
                 .setColor(BoardRenderer.color(colorIndex))
                 .setMentionable(true)
                 .setHoisted(true) // "Display role members separately from online members"
@@ -188,9 +188,9 @@ public class TeamService {
     public void rename(Guild guild, BotProperties.Faction faction, Team team, String newName) {
         team.name = newName;
         Role role = team.roleId == null ? null : guild.getRoleById(team.roleId);
-        if (role != null) role.getManager().setName(newName).complete();
+        if (role != null) role.getManager().setName(roleName(faction, newName)).complete();
         Role captainRole = team.captainRoleId == null ? null : guild.getRoleById(team.captainRoleId);
-        if (captainRole != null) captainRole.getManager().setName(captainRoleName(newName)).complete();
+        if (captainRole != null) captainRole.getManager().setName(captainRoleName(faction, newName)).complete();
         TextChannel text = team.textChannelId == null ? null : guild.getTextChannelById(team.textChannelId);
         if (text != null) text.getManager().setName(textName(faction, newName)).complete();
         VoiceChannel voice = team.voiceChannelId == null ? null : guild.getVoiceChannelById(team.voiceChannelId);
@@ -269,8 +269,15 @@ public class TeamService {
         return perms.stream().map(Permission::getName).collect(Collectors.joining(", "));
     }
 
-    static String captainRoleName(String teamName) {
-        String name = teamName + " Captain";
+    /** "CX · Alpha": the faction tag keeps same-named teams in different factions apart. */
+    static String roleName(BotProperties.Faction faction, String teamName) {
+        String name = faction.getTag() + " · " + teamName;
+        return name.length() > 100 ? name.substring(0, 100) : name;
+    }
+
+    /** "CX · Alpha Captain". */
+    static String captainRoleName(BotProperties.Faction faction, String teamName) {
+        String name = faction.getTag() + " · " + teamName + " Captain";
         return name.length() > 100 ? name.substring(0, 100) : name;
     }
 

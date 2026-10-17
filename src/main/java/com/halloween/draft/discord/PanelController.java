@@ -2,6 +2,7 @@ package com.halloween.draft.discord;
 
 import com.halloween.draft.competition.CompetitionRepository.ApiKey;
 import com.halloween.draft.competition.CompetitionService;
+import com.halloween.draft.config.BotProperties;
 import com.halloween.draft.config.BotProperties.Faction;
 import com.halloween.draft.core.DraftManager;
 import com.halloween.draft.core.DraftManager.CaptainInfo;
@@ -126,11 +127,13 @@ public class PanelController {
 
     private final DraftManager drafts;
     private final CompetitionService competitions;
+    private final BotProperties props;
     private final ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
     /** Captains chosen in the "Set Captains" picker, waiting for keep-order / shuffle. */
     private final Map<String, List<Long>> pendingCaptains = new ConcurrentHashMap<>();
 
-    public PanelController(DraftManager drafts, CompetitionService competitions) {
+    public PanelController(DraftManager drafts, CompetitionService competitions, BotProperties props) {
+        this.props = props;
         this.drafts = drafts;
         this.competitions = competitions;
     }
@@ -244,7 +247,7 @@ public class PanelController {
             case "tdok" -> home(g, m, f, drafts.teardown(g, m, f, a[2].equals("1")));
             case "my" -> captainHome(g, m, f, null);
             case "keys" -> keysView(f, null);
-            case "qclr" -> captainHome(g, m, f, drafts.queueClear(m, ch));
+            case "qclr" -> captainHome(g, m, f, drafts.queueClear(m, f.getChannelId()));
             case "qrm" -> queueRemoveView(f, m);
             default -> home(g, m, f, "❌ Unknown action.");
         });
@@ -270,7 +273,7 @@ public class PanelController {
             case "replold" -> replaceNewView(g, f, Long.parseLong(values.get(0)));
             case "rmsel" -> home(g, m, f, drafts.removePlayers(g, m, f.getKey(), ch, values));
             case "apsel" -> home(g, m, f, drafts.adminPick(g, m, f.getKey(), ch, values.get(0)));
-            case "qaddsel" -> captainHome(g, m, f, drafts.queueAdd(g, m, ch, values.get(0)));
+            case "qaddsel" -> captainHome(g, m, f, drafts.queueAdd(g, m, f.getChannelId(), values.get(0)));
             // The faction's own channel, so a captain in two factions picks for the panel they're using.
             case "pksel" -> captainHome(g, m, f, drafts.pick(g, m, f.getChannelId(), values.get(0)));
             case "qrmsel" -> captainHome(g, m, f, drafts.queueRemove(f, m.getIdLong(),
@@ -322,7 +325,7 @@ public class PanelController {
                 long captainId = Long.parseLong(a[2]);
                 Member captain = g.getMemberById(captainId);
                 if (captain == null) throw new UserError("That captain isn't in the server any more.");
-                String result = drafts.nameTeam(g, m, ch, text, captainId == m.getIdLong() ? null : captain);
+                String result = drafts.nameTeam(g, m, f.getChannelId(), text, captainId == m.getIdLong() ? null : captain);
                 yield drafts.isLeader(m, f) ? home(g, m, f, result) : captainHome(g, m, f, result);
             }
             case "maddtorn" -> {
@@ -374,7 +377,9 @@ public class PanelController {
     private View leaderHome(Guild g, Member m, Faction f, String notice) {
         PanelInfo p = drafts.panelInfo(g, f);
         CompetitionService.Status comp = competitions.status(f);
-        return p.running() ? leaderRunning(g, m, f, notice, p, comp) : leaderSetup(m, f, notice, p, comp);
+        if (p.running()) return leaderRunning(g, m, f, notice, p, comp);
+        if (p.needsCleanUp()) return leaderFinished(m, f, notice, p, comp);
+        return leaderSetup(m, f, notice, p, comp);
     }
 
     /**
@@ -401,12 +406,12 @@ public class PanelController {
 
         ui.divider().heading("📋 Setup — required, in order");
         ui.text(check(captainsDone, next == 0, "Captains", p.captains().isEmpty() ? "none yet"
-                : String.join(", ", p.captains().stream().map(c -> "<@" + c.id() + ">").toList())) + "\n"
+                        : String.join(", ", p.captains().stream().map(c -> "<@" + c.id() + ">").toList())) + "\n"
                 + check(namesDone, next == 1, "Team names", p.captains().isEmpty() ? "after captains"
-                : named + " of " + p.captains().size()) + "\n"
+                        : named + " of " + p.captains().size()) + "\n"
                 + check(timesDone, next == 2, "Competition times", timesDone
-                ? DraftManager.tct(comp.start()) + " → " + DraftManager.tct(comp.end()) + " TCT"
-                : timesPassed ? "start has passed, set new times" : "not set") + "\n"
+                        ? DraftManager.tct(comp.start()) + " → " + DraftManager.tct(comp.end()) + " TCT"
+                        : timesPassed ? "start has passed, set new times" : "not set") + "\n"
                 + check(keysDone, next == 3, "API keys", comp.keys() + " of " + CompetitionService.MIN_KEYS));
         ui.buttons(
                 step(captainsDone, next == 0, id("setcap", f), "👑", "Captains"),
@@ -447,6 +452,42 @@ public class PanelController {
         return ui.build();
     }
 
+    /**
+     * After a draft has finished or been ended: the teams and the competition. A new draft needs
+     * an admin to run Clean Up first, so the setup steps aren't shown.
+     */
+    private View leaderFinished(Member m, Faction f, String notice, PanelInfo p, CompetitionService.Status comp) {
+        boolean admin = m.hasPermission(Permission.ADMINISTRATOR);
+        boolean isCaptain = p.captains().stream().anyMatch(c -> c.id() == m.getIdLong());
+        boolean locked = p.rostersLocked();
+
+        Ui ui = new Ui(BLURPLE).text("## 🎛️ " + f.getName() + " · Draft Control\n"
+                + (p.status() == DraftStatus.ENDED ? "-# 🛑 The draft was ended early" : "-# ✅ The draft is complete"));
+        ui.notice(notice);
+
+        ui.divider().heading("👑 Teams");
+        ui.text(captainLines(p, true));
+        if (locked) ui.text("-# 🔒 Rosters are locked while the competition is live.");
+        ui.buttons(locked ? null : Button.secondary(id("repl", f), "🔁 Replace Captain"),
+                Button.secondary(id("name", f), "🏷️ Team Names"),
+                isCaptain ? Button.secondary(id("my", f), "🎯 My Team") : null);
+
+        ui.divider().heading("🏁 Competition");
+        ui.text(competitionLines(comp, true));
+        ui.buttons(Button.secondary(id("ctimes", f), "🗓️ Competition Times"),
+                Button.secondary(id("keys", f), "🔑 API Keys (" + comp.keys() + ")"));
+
+        ui.divider().heading("🧹 Next draft");
+        ui.text(comp.live() ? "Once the competition has finished, an admin runs 🧹 Clean Up to clear these teams before the next draft."
+                : "An admin needs to run 🧹 Clean Up to clear these teams before the next draft can be set up.");
+
+        ui.divider();
+        ui.buttons(admin && !comp.live() ? Button.danger(id("td", f), "🧹 Clean Up") : null,
+                Button.secondary(id("close", f), "✖ Close"));
+        ui.text("-# Only you can see this panel · it closes after " + PANEL_MINUTES + " minutes");
+        return ui.build();
+    }
+
     /** During the draft: draft controls first, then participants, teams and the competition. */
     private View leaderRunning(Guild g, Member m, Faction f, String notice, PanelInfo p, CompetitionService.Status comp) {
         boolean isCaptain = p.captains().stream().anyMatch(c -> c.id() == m.getIdLong());
@@ -458,20 +499,23 @@ public class PanelController {
                 + (p.timerSeconds() > 0 ? p.timerSeconds() / 60 + " min timer" : "no timer")
                 + " · auto-pick " + (p.autopick() ? "on" : "off"));
         boolean myPick = !paused && p.onClock() != null && p.onClock() == m.getIdLong();
+        boolean locked = p.rostersLocked();
+        if (locked) ui.text("🔒 **Rosters are locked** — the competition is live, so undo, admin pick, add, remove "
+                + "and replace captain wait until it ends. Captains can still pick.");
         ui.buttons(myPick ? Button.success(id("pk", f), "🎯 Pick Player") : null,
                 paused ? Button.success(id("resume", f), "▶️ Resume") : Button.primary(id("pause", f), "⏸️ Pause"),
-                p.picksMade() > 0 ? Button.secondary(id("undo", f), "↩️ Undo") : null,
-                p.poolSize() > 0 ? Button.secondary(id("apick", f), "🛡️ Admin Pick") : null);
+                !locked && p.picksMade() > 0 ? Button.secondary(id("undo", f), "↩️ Undo") : null,
+                !locked && p.poolSize() > 0 ? Button.secondary(id("apick", f), "🛡️ Admin Pick") : null);
 
         ui.divider().heading("👥 Participants");
         ui.text("**" + p.poolSize() + "** left to pick · " + p.poolOffDiscord() + " not on Discord");
         ui.buttons(Button.secondary(id("pool", f, "0"), "📋 View"),
-                Button.secondary(id("add", f), "➕ Add"),
-                p.poolSize() > 0 || p.picksMade() > 0 ? Button.secondary(id("rm", f), "➖ Remove") : null);
+                locked ? null : Button.secondary(id("add", f), "➕ Add"),
+                !locked && (p.poolSize() > 0 || p.picksMade() > 0) ? Button.secondary(id("rm", f), "➖ Remove") : null);
 
         ui.divider().heading("👑 Teams");
         ui.text(captainLines(p, true));
-        ui.buttons(Button.secondary(id("repl", f), "🔁 Replace Captain"),
+        ui.buttons(locked ? null : Button.secondary(id("repl", f), "🔁 Replace Captain"),
                 Button.secondary(id("name", f), "🏷️ Team Names"),
                 isCaptain ? Button.secondary(id("my", f), "🎯 My Team") : null);
 
@@ -508,19 +552,22 @@ public class PanelController {
 
         ui.heading("📍 Status");
         if (c.team() == null) ui.text("⚠️ **Your team needs a name** before the draft can start.");
-        ui.text(c.running() ? turnLine(c) : "The draft hasn't started yet. Your queue and picks show here once it does.");
+        ui.text(c.running() ? turnLine(c) : c.finished() ? "✅ The draft is over — here's your team."
+                : "The draft hasn't started yet. Your queue and picks show here once it does.");
         if (c.onClock() && !c.paused()) ui.buttons(Button.success(id("pk", f), "🎯 Pick Player"));
 
         if (c.running()) {
             // Queue first: it's what captains act on, and it stays put as the picks list grows.
-            ui.divider().heading("📋 Your queue (" + c.queue().size() + "/5)");
+            int maxQueue = props.getMaxQueue();
+            ui.divider().heading("📋 Your queue (" + c.queue().size() + "/" + maxQueue + ")");
             ui.text(c.queue().isEmpty()
                     ? "-# Empty. Queued players are picked for you automatically when your turn starts."
                     : numbered(c.queue()));
-            ui.buttons(c.queue().size() < 5 ? style(!c.onClock(), id("qadd", f), "➕ Queue Player") : null,
+            ui.buttons(c.queue().size() < maxQueue ? style(!c.onClock(), id("qadd", f), "➕ Queue Player") : null,
                     c.queue().isEmpty() ? null : Button.secondary(id("qrm", f), "➖ Unqueue"),
                     c.queue().isEmpty() ? null : Button.secondary(id("qclr", f), "🗑️ Clear"));
-
+        }
+        if (c.running() || c.finished()) {
             ui.divider().heading("🧾 Your picks (" + c.picks().size() + ")");
             ui.text(c.picks().isEmpty() ? "-# None yet." : bullets(c.picks(), 20)
                     + (c.picks().size() > 20 ? "-# …and " + (c.picks().size() - 20) + " more" : ""));
@@ -531,7 +578,7 @@ public class PanelController {
         ui.buttons(style(c.team() == null, id("name", f), c.team() == null ? "🏷️ Name Team" : "🏷️ Rename Team"),
                 poolReady ? Button.secondary(id("pool", f, "0"), "📋 Participants") : null,
                 drafts.isLeader(m, f) ? Button.secondary(id("home", f), "🎛️ Control Panel")
-                        : Button.secondary(id("my", f), "🔄 Refresh"),
+                                      : Button.secondary(id("my", f), "🔄 Refresh"),
                 Button.secondary(id("close", f), "✖ Close"));
         return ui.build();
     }
@@ -749,7 +796,7 @@ public class PanelController {
         if (c.paused()) {
             String left = c.pausedRemainingMs() == null ? "" : " · " + Math.max(1, c.pausedRemainingMs() / 1000) + "s left on the clock";
             return c.onClock() ? "⏸️ **Draft paused** — you're on the clock when it resumes" + left
-                    : "⏸️ **Draft paused** — <@" + c.clockCaptain() + "> is up next" + left;
+                               : "⏸️ **Draft paused** — <@" + c.clockCaptain() + "> is up next" + left;
         }
         if (c.onClock()) return "🎯 **You're on the clock!** This is pick #" + c.nextPick() + timer;
         if (c.picksAway() == null) return "✅ You've no picks left — there aren't enough players for another round.";
@@ -802,6 +849,11 @@ public class PanelController {
         sb.append("🔑 ").append(st.keysWorking()).append('/').append(st.keys()).append(" keys working");
         if (st.lastCheckedMs() != null) sb.append(" · checked <t:").append(st.lastCheckedMs() / 1000).append(":R>");
         if (st.lastError() != null) sb.append("\n⚠️ ").append(st.lastError());
+        if (!st.leftFaction().isEmpty()) {
+            sb.append("\n⚠️ Left the faction (hits since then can't be seen): ")
+                    .append(String.join(", ", st.leftFaction().stream().limit(10).toList()))
+                    .append(st.leftFaction().size() > 10 ? " and " + (st.leftFaction().size() - 10) + " more" : "");
+        }
         if (st.missingTornIds() > 0) {
             sb.append("\n⚠️ ").append(st.missingTornIds()).append(" drafted player")
                     .append(st.missingTornIds() == 1 ? " has" : "s have")

@@ -34,6 +34,7 @@ public class BotProperties {
         private long leadershipRoleId;
         private long channelId;
         private long tornFactionId;
+        private String tag;
 
         public String getKey() { return key; }
         public void setKey(String key) { this.key = key; }
@@ -47,6 +48,9 @@ public class BotProperties {
         public void setChannelId(long channelId) { this.channelId = channelId; }
         public long getTornFactionId() { return tornFactionId; }
         public void setTornFactionId(long tornFactionId) { this.tornFactionId = tornFactionId; }
+        /** Short label put in front of team role names, e.g. "CX". Falls back to the faction name. */
+        public String getTag() { return tag == null || tag.isBlank() ? name : tag.trim(); }
+        public void setTag(String tag) { this.tag = tag; }
     }
 
     public String getToken() { return token; }
