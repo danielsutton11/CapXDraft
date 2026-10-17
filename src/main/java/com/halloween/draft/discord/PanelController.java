@@ -234,7 +234,8 @@ public class PanelController {
                         .text("This deletes **" + summary + "**: their roles, captain roles, text and voice channels, "
                                 + "the participant list, removals and competition times. It also clears the bot's board "
                                 + "and messages from <#" + f.getChannelId() + "> and the " + f.getName()
-                                + " scoreboard from the live scores channel.\n"
+                                + " scoreboard from the live scores channel, and permanently deletes every stored "
+                                + f.getName() + " attack record and API key (new keys are needed for the next competition).\n"
                                 + "-# Other factions and other people's messages aren't touched.")
                         .divider()
                         .heading("Keep the captains for the next draft?")
@@ -406,12 +407,12 @@ public class PanelController {
 
         ui.divider().heading("📋 Setup — required, in order");
         ui.text(check(captainsDone, next == 0, "Captains", p.captains().isEmpty() ? "none yet"
-                        : String.join(", ", p.captains().stream().map(c -> "<@" + c.id() + ">").toList())) + "\n"
+                : String.join(", ", p.captains().stream().map(c -> "<@" + c.id() + ">").toList())) + "\n"
                 + check(namesDone, next == 1, "Team names", p.captains().isEmpty() ? "after captains"
-                        : named + " of " + p.captains().size()) + "\n"
+                : named + " of " + p.captains().size()) + "\n"
                 + check(timesDone, next == 2, "Competition times", timesDone
-                        ? DraftManager.tct(comp.start()) + " → " + DraftManager.tct(comp.end()) + " TCT"
-                        : timesPassed ? "start has passed, set new times" : "not set") + "\n"
+                ? DraftManager.tct(comp.start()) + " → " + DraftManager.tct(comp.end()) + " TCT"
+                : timesPassed ? "start has passed, set new times" : "not set") + "\n"
                 + check(keysDone, next == 3, "API keys", comp.keys() + " of " + CompetitionService.MIN_KEYS));
         ui.buttons(
                 step(captainsDone, next == 0, id("setcap", f), "👑", "Captains"),
@@ -578,7 +579,7 @@ public class PanelController {
         ui.buttons(style(c.team() == null, id("name", f), c.team() == null ? "🏷️ Name Team" : "🏷️ Rename Team"),
                 poolReady ? Button.secondary(id("pool", f, "0"), "📋 Participants") : null,
                 drafts.isLeader(m, f) ? Button.secondary(id("home", f), "🎛️ Control Panel")
-                                      : Button.secondary(id("my", f), "🔄 Refresh"),
+                        : Button.secondary(id("my", f), "🔄 Refresh"),
                 Button.secondary(id("close", f), "✖ Close"));
         return ui.build();
     }
@@ -796,7 +797,7 @@ public class PanelController {
         if (c.paused()) {
             String left = c.pausedRemainingMs() == null ? "" : " · " + Math.max(1, c.pausedRemainingMs() / 1000) + "s left on the clock";
             return c.onClock() ? "⏸️ **Draft paused** — you're on the clock when it resumes" + left
-                               : "⏸️ **Draft paused** — <@" + c.clockCaptain() + "> is up next" + left;
+                    : "⏸️ **Draft paused** — <@" + c.clockCaptain() + "> is up next" + left;
         }
         if (c.onClock()) return "🎯 **You're on the clock!** This is pick #" + c.nextPick() + timer;
         if (c.picksAway() == null) return "✅ You've no picks left — there aren't enough players for another round.";

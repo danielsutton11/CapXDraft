@@ -52,8 +52,9 @@ A read-only status view: who's on the clock, the captains and their teams, and t
   again until an admin runs 🧹 Clean Up for that faction. That stops old team roles and members
   carrying over.
 - **Clean Up is per faction.** It deletes that faction's teams (roles, text and voice channels),
-  participant list, removals and competition, clears the bot's messages from its draft channel and
-  removes its scoreboard from the live scores channel. Other factions are untouched. It's blocked
+  participant list, removals and competition, clears the bot's messages from its draft channel,
+  removes its scoreboard from the live scores channel, and permanently deletes its stored attack
+  records and API keys (two new keys are needed before the next draft). Other factions are untouched. It's blocked
   while the faction's draft is running or its competition is live.
 - **Rosters lock while the competition is live.** Undo, Add, Remove, Admin Pick and Replace Captain
   are refused until it ends, because scores follow whoever is on each team. Captains can still pick
@@ -133,11 +134,11 @@ two minutes after the end once the last hits are in.
 
 1. Add a **Postgres** service to the project.
 2. On the bot service, set these variables:
-   - `DISCORD_TOKEN`
-   - `TORN_API_KEY` — a public or limited key is enough
-   - `KEY_ENCRYPTION_SECRET` — any long random string (16+ characters); never change it once keys are stored
-   - `PGHOST=${{Postgres.PGHOST}}`, `PGPORT=${{Postgres.PGPORT}}`, `PGDATABASE=${{Postgres.PGDATABASE}}`,
-     `PGUSER=${{Postgres.PGUSER}}`, `PGPASSWORD=${{Postgres.PGPASSWORD}}`
+  - `DISCORD_TOKEN`
+  - `TORN_API_KEY` — a public or limited key is enough
+  - `KEY_ENCRYPTION_SECRET` — any long random string (16+ characters); never change it once keys are stored
+  - `PGHOST=${{Postgres.PGHOST}}`, `PGPORT=${{Postgres.PGPORT}}`, `PGDATABASE=${{Postgres.PGDATABASE}}`,
+    `PGUSER=${{Postgres.PGUSER}}`, `PGPASSWORD=${{Postgres.PGPASSWORD}}`
 3. Deploy. The Dockerfile builds the jar. Tables are created automatically on start.
 
 There's no web port, so leave the healthcheck off.

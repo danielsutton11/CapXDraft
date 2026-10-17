@@ -50,6 +50,11 @@ public class CompetitionRepository {
                 """, factionKey, ownerTornId, ownerName, encryptedKey, addedBy);
     }
 
+    /** Removes every stored key for a faction (Clean Up). Returns how many were removed. */
+    public int deleteAllKeys(String factionKey) {
+        return jdbc.update("DELETE FROM faction_api_keys WHERE faction_key = ?", factionKey);
+    }
+
     public int deleteKey(String factionKey, long id) {
         return jdbc.update("DELETE FROM faction_api_keys WHERE faction_key = ? AND id = ?", factionKey, id);
     }
@@ -102,8 +107,9 @@ public class CompetitionRepository {
         return out;
     }
 
-    public void deleteAttacks(String factionKey) {
-        jdbc.update("DELETE FROM competition_attacks WHERE faction_key = ?", factionKey);
+    /** Removes every stored attack for a faction (Clean Up). Returns how many were removed. */
+    public int deleteAttacks(String factionKey) {
+        return jdbc.update("DELETE FROM competition_attacks WHERE faction_key = ?", factionKey);
     }
 
     static Timestamp ts(Instant i) {

@@ -256,8 +256,8 @@ public class DraftManager {
                 if (previous.contains(id) && teamNamed(s, id)) continue;
                 dm(id, "👑 You're a **" + f.getName() + "** draft captain!\n"
                         + (teamNamed(s, id) ? "Your team is **" + s.teams.get(id).name + "**. "
-                                            : "**Name your team:** run `/draft` in <#" + f.getChannelId()
-                                              + "> and press 🏷️ **Name Team**.\n")
+                        : "**Name your team:** run `/draft` in <#" + f.getChannelId()
+                        + "> and press 🏷️ **Name Team**.\n")
                         + "You'll get a DM here when it's your turn to pick.");
             }
 
@@ -505,7 +505,7 @@ public class DraftManager {
             dm(newId, "🔁 You're now a " + f.getName() + " captain"
                     + (named ? " of **" + team.name + "**" : "") + ", replacing " + oldCap.getEffectiveName() + "."
                     + (named ? "" : "\n**Name your team:** run `/draft` in <#" + f.getChannelId()
-                                    + "> and press 🏷️ **Name Team**."));
+                    + "> and press 🏷️ **Name Team**."));
             dm(oldId, "🔁 You've been replaced as a " + f.getName() + " captain by " + newCap.getEffectiveName() + ".");
             if (running) {
                 if (s.draft.status == DraftStatus.COMPLETE) finish(f, s, g);
@@ -551,7 +551,7 @@ public class DraftManager {
                 String tornName = torn.fetchName(tornId);
                 Member linked = memberByTornId(g, tornId, tornName);
                 p = linked != null ? new Player(linked.getIdLong(), linked.getEffectiveName(), tornId)
-                                   : Player.tornOnly(tornId, tornName);
+                        : Player.tornOnly(tornId, tornName);
             }
             if (s.activeCaptains().contains(p.id)) throw new UserError(p.display + " is a captain.");
 
@@ -1117,12 +1117,16 @@ public class DraftManager {
 
         int messages = clearOwnMessages(g.getTextChannelById(f.getChannelId()));
         boolean scoreboard = deleteScoreboard(g, f, scoreboardId[0]);
+        int attacks = competitionRepo.deleteAttacks(f.getKey());
+        int keys = competitionRepo.deleteAllKeys(f.getKey());
 
         return "🧹 " + f.getName() + " cleaned up: deleted " + deleted + " team" + (deleted == 1 ? "" : "s")
                 + " (roles, text and voice channels)"
                 + (clearCaptains ? ", cleared the captains" : "")
                 + ", cleared " + messages + " bot message" + (messages == 1 ? "" : "s") + " from <#" + f.getChannelId() + ">"
-                + (scoreboard ? " and removed the scoreboard." : ".");
+                + (scoreboard ? ", removed the scoreboard" : "")
+                + ", deleted " + attacks + " stored attack" + (attacks == 1 ? "" : "s")
+                + " and " + keys + " API key" + (keys == 1 ? "" : "s") + ".";
     }
 
     /**
