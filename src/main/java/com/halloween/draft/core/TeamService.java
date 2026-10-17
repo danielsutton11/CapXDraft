@@ -77,12 +77,7 @@ public class TeamService {
                 .setMentionable(true)
                 .complete();
         team.roleId = role.getIdLong();
-        Role captainRole = guild.createRole()
-                .setName(captainRoleName(faction, team.name))
-                .setColor(BoardRenderer.color(colorIndex))
-                .setMentionable(true)
-                .setHoisted(true) // "Display role members separately from online members"
-                .complete();
+        Role captainRole = createCaptainRole(guild, captainRoleName(faction, team.name));
         team.captainRoleId = captainRole.getIdLong();
         // New roles land at the bottom of the list - move them up under the bot's own role,
         // team role first, then the captain role above it.
@@ -118,6 +113,48 @@ public class TeamService {
         setTeamCaptain(guild, team, captainId, true);
         if (!refused.isEmpty()) log.warn("Team {}: Discord refused {}", team.name, refused);
         return refused;
+    }
+
+    /**
+     * Creates a team captain role with the shared captain gradient, hoisted ("Display role members
+     * separately"). If Discord refuses the gradient (no enhanced role colours), it's created with
+     * the first colour as a solid colour instead.
+     */
+    private Role createCaptainRole(Guild guild, String name) {
+        int primary = hex(props.getCaptainColorPrimary(), 0xA475FE);
+        int secondary = hex(props.getCaptainColorSecondary(), 0x9FC1FF);
+        try {
+            return guild.createRole().setName(name).setGradientColors(primary, secondary)
+                    .setMentionable(true).setHoisted(true).complete();
+        } catch (RuntimeException e) {
+            log.warn("Gradient refused for role {} ({}), using a solid colour", name, e.getMessage());
+            return guild.createRole().setName(name).setColor(primary)
+                    .setMentionable(true).setHoisted(true).complete();
+        }
+    }
+
+    /** Brings an existing team captain role in line with the shared captain gradient. Failures are logged. */
+    public void styleCaptainRole(Guild guild, Team team) {
+        Role role = team == null || team.captainRoleId == null ? null : guild.getRoleById(team.captainRoleId);
+        if (role == null) return;
+        int primary = hex(props.getCaptainColorPrimary(), 0xA475FE);
+        int secondary = hex(props.getCaptainColorSecondary(), 0x9FC1FF);
+        var colors = role.getColors();
+        if (colors != null && colors.getPrimaryRaw() == primary && colors.getSecondaryRaw() == secondary) return;
+        role.getManager().setGradientColors(primary, secondary).queue(null, e -> {
+            log.warn("Gradient refused for role {} ({}), using a solid colour", role.getName(), e.getMessage());
+            role.getManager().setColor(primary).queue(null, e2 -> {});
+        });
+    }
+
+    /** "#A475FE" → 0xA475FE; anything unreadable gives the fallback. */
+    static int hex(String value, int fallback) {
+        if (value == null) return fallback;
+        try {
+            return Integer.parseInt(value.trim().replace("#", ""), 16) & 0xFFFFFF;
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
     }
 
     /**

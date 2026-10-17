@@ -34,6 +34,11 @@ draftbot:
   # Max players a captain can queue
   max-queue: 5
 
+  # Gradient used for every team captain role (needs the server's enhanced role colours; falls
+  # back to the first colour as a solid colour if Discord won't take a gradient)
+  captain-color-primary: "#A475FE"
+  captain-color-secondary: "#9FC1FF"
+
   # tag: short label in front of team role names, e.g. "CX · Alpha"
   factions:
     - key: capacity-x

@@ -13,6 +13,9 @@ public class BotProperties {
     private String tornApiKey;
     private long teamCategoryId;
     private int maxQueue = 5;
+    /** Every team captain role gets this gradient (hex, e.g. #A475FE → #9FC1FF). */
+    private String captainColorPrimary = "#A475FE";
+    private String captainColorSecondary = "#9FC1FF";
     private String eventName = "";
     private long scoreboardChannelId;
     private String keyEncryptionSecret;
@@ -65,6 +68,10 @@ public class BotProperties {
     public void setKeyEncryptionSecret(String keyEncryptionSecret) { this.keyEncryptionSecret = keyEncryptionSecret; }
     public String getEventName() { return eventName; }
     public void setEventName(String eventName) { this.eventName = eventName; }
+    public String getCaptainColorPrimary() { return captainColorPrimary; }
+    public void setCaptainColorPrimary(String c) { this.captainColorPrimary = c; }
+    public String getCaptainColorSecondary() { return captainColorSecondary; }
+    public void setCaptainColorSecondary(String c) { this.captainColorSecondary = c; }
     public int getMaxQueue() { return maxQueue; }
     public void setMaxQueue(int maxQueue) { this.maxQueue = maxQueue; }
     public List<Long> getTeamChannelRoleIds() { return teamChannelRoleIds; }

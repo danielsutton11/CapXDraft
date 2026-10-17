@@ -122,6 +122,7 @@ public class DraftManager {
                     TextChannel home = jda.getTextChannelById(f.getChannelId());
                     Guild hg = home == null ? null : home.getGuild();
                     if (hg != null) {
+                        s.teams.values().forEach(t -> teams.styleCaptainRole(hg, t)); // existing captain roles too
                         // The draft channel always has a message with the Open my draft panel button:
                         // the board once a draft exists, the launcher before that.
                         if (s.draft == null) ensureLauncher(f, s, hg);
