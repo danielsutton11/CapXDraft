@@ -176,7 +176,7 @@ public class CompetitionService {
                     + " TCT but the draft is still running (" + snap.eligible().size() + " players left). "
                     + "Anyone picked from now on brings their hits since the start with them. Undo, add, remove, "
                     + "admin pick and replace captain are now locked. Finish the draft quickly, or use "
-                    + "`/draft` → 🛑 End Draft.";
+                    + "🎛️ Open my draft panel → 🛑 End Draft.";
             drafts.updateCompetition(f, x -> { x.draftLiveWarned = true; x.draftSoonWarned = true; });
         } else if (!c.live(now) && c.startEpoch - now <= DRAFT_WARN_SECONDS && !c.draftSoonWarned) {
             text = "⏰ **" + f.getName() + ":** the competition starts <t:" + c.startEpoch + ":R> ("
@@ -274,7 +274,7 @@ public class CompetitionService {
         Set<Long> notify = new HashSet<>();
         keys.forEach(k -> notify.add(k.addedBy()));
         String text = "⚠️ **" + f.getName() + " competition:** I can't fetch attacks right now (" + problem
-                + "). Open `/draft` → 🔑 API Keys to check or add a key — attacks are caught up once a key works.";
+                + "). Open your draft panel → 🔑 API Keys to check or add a key — attacks are caught up once a key works.";
         notify.forEach(id -> jda.openPrivateChannelById(id).flatMap(pc -> pc.sendMessage(text)).queue(null, e -> {}));
     }
 
@@ -323,7 +323,7 @@ public class CompetitionService {
             throw new UserError(secret == null || secret.isBlank()
                     ? "KEY_ENCRYPTION_SECRET isn't set on the server, so keys can't be stored safely."
                     : "KEY_ENCRYPTION_SECRET is too short (" + secret.length()
-                      + " characters) — it needs at least 16, so keys can't be stored safely.");
+                    + " characters) — it needs at least 16, so keys can't be stored safely.");
         }
         if (f.getTornFactionId() <= 0) throw new UserError("No Torn faction ID is configured for " + f.getName() + ".");
         TornAttackClient.KeyOwner owner = torn.verify(rawKey.trim(), f.getTornFactionId(), f.getName());

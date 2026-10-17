@@ -11,6 +11,8 @@ import com.halloween.draft.model.Player;
 import com.halloween.draft.model.Team;
 import jakarta.annotation.PostConstruct;
 import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.components.actionrow.ActionRow;
+import net.dv8tion.jda.api.components.buttons.Button;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
@@ -117,6 +119,14 @@ public class DraftManager {
             try {
                 withLock(f.getKey(), () -> {
                     FactionState s = state(f);
+                    TextChannel home = jda.getTextChannelById(f.getChannelId());
+                    Guild hg = home == null ? null : home.getGuild();
+                    if (hg != null) {
+                        // The draft channel always has a message with the Open my draft panel button:
+                        // the board once a draft exists, the launcher before that.
+                        if (s.draft == null) ensureLauncher(f, s, hg);
+                        else if (!s.draftRunning()) commit(f, s, hg);
+                    }
                     if (!s.draftRunning()) return null;
                     Guild g = guildFor(s.draft);
                     if (g == null) return null;
@@ -256,8 +266,8 @@ public class DraftManager {
                 if (previous.contains(id) && teamNamed(s, id)) continue;
                 dm(id, "👑 You're a **" + f.getName() + "** draft captain!\n"
                         + (teamNamed(s, id) ? "Your team is **" + s.teams.get(id).name + "**. "
-                        : "**Name your team:** run `/draft` in <#" + f.getChannelId()
-                        + "> and press 🏷️ **Name Team**.\n")
+                        : "**Name your team:** go to <#" + f.getChannelId()
+                        + ">, press 🎛️ **Open my draft panel**, then 🏷️ **Name Team**.\n")
                         + "You'll get a DM here when it's your turn to pick.");
             }
 
@@ -352,7 +362,8 @@ public class DraftManager {
             s.competition.draftSoonWarned = false; // a new draft gets its own overrun warnings
             s.competition.draftLiveWarned = false;
 
-            clearOwnMessages(channel); // previous boards, old pings - the new board is the only message
+            clearOwnMessages(channel); // launcher, old boards and pings - the new board is the only message
+            s.launcherMessageId = null;
             refreshBoard(f, s, g);
             advance(f, s, g, null);
             commit(f, s, g);
@@ -504,8 +515,8 @@ public class DraftManager {
             boolean named = team != null && team.roleId != null;
             dm(newId, "🔁 You're now a " + f.getName() + " captain"
                     + (named ? " of **" + team.name + "**" : "") + ", replacing " + oldCap.getEffectiveName() + "."
-                    + (named ? "" : "\n**Name your team:** run `/draft` in <#" + f.getChannelId()
-                    + "> and press 🏷️ **Name Team**."));
+                    + (named ? "" : "\n**Name your team:** go to <#" + f.getChannelId()
+                    + ">, press 🎛️ **Open my draft panel**, then 🏷️ **Name Team**."));
             dm(oldId, "🔁 You've been replaced as a " + f.getName() + " captain by " + newCap.getEffectiveName() + ".");
             if (running) {
                 if (s.draft.status == DraftStatus.COMPLETE) finish(f, s, g);
@@ -1117,6 +1128,12 @@ public class DraftManager {
 
         int messages = clearOwnMessages(g.getTextChannelById(f.getChannelId()));
         boolean scoreboard = deleteScoreboard(g, f, scoreboardId[0]);
+        withLock(f.getKey(), () -> {
+            FactionState s = state(f);
+            s.launcherMessageId = null;
+            ensureLauncher(f, s, g);
+            return null;
+        });
         int attacks = competitionRepo.deleteAttacks(f.getKey());
         int keys = competitionRepo.deleteAllKeys(f.getKey());
 
@@ -1226,8 +1243,8 @@ public class DraftManager {
             Draft d = s.draft;
             if (d == null || d.status != DraftStatus.ACTIVE || d.turnToken != token || d.warningSent) return null;
             d.warningSent = true;
-            dm(d.currentCaptain(), "⏳ **30 seconds left** on your " + f.getName() + " draft pick! Run `/draft` in <#"
-                    + d.channelId + "> and press 🎯 **Pick Player**" + (d.autopick ? ", or one will be made for you." : "."));
+            dm(d.currentCaptain(), "⏳ **30 seconds left** on your " + f.getName() + " draft pick! Go to <#"
+                    + d.channelId + ">, press 🎛️ **Open my draft panel**, then 🎯 **Pick Player**" + (d.autopick ? ", or one will be made for you." : "."));
             save(s);
             return null;
         });
@@ -1252,7 +1269,7 @@ public class DraftManager {
             } else {
                 d.turnDeadlineMs = null;
                 d.turnToken++;
-                dm(captain, "⏰ Your time is up! You can still pick with 🎯 **Pick Player** in `/draft`, or leadership can pick for you with 🛡️ Admin Pick.");
+                dm(captain, "⏰ Your time is up! You can still pick: <#" + d.channelId + "> → 🎛️ **Open my draft panel** → 🎯 **Pick Player**. Or leadership can pick for you with 🛡️ Admin Pick.");
             }
             commit(f, s, g);
             return null;
@@ -1286,8 +1303,8 @@ public class DraftManager {
         deletePing(g, d); // the previous turn's channel ping, if there was one
         int idx = d.nextPickIndex();
         String clock = d.turnDeadlineMs != null ? " — time's up <t:" + d.turnDeadlineMs / 1000 + ":R>" : "";
-        String text = "🎯 **It's your pick** (#" + (idx + 1) + ")! Run `/draft` in <#" + d.channelId
-                + "> and press 🎯 **Pick Player**" + clock + ".\nDraft board: " + boardLink(g, d);
+        String text = "🎯 **It's your pick** (#" + (idx + 1) + ")! Go to <#" + d.channelId
+                + ">, press 🎛️ **Open my draft panel**, then 🎯 **Pick Player**" + clock + ".\nDraft board: " + boardLink(g, d);
         JDA j = jda;
         if (j == null) return;
         String key = s.factionKey;
@@ -1313,7 +1330,7 @@ public class DraftManager {
                 deletePing(g, d);
                 String clock = d.turnDeadlineMs != null ? " — time's up <t:" + d.turnDeadlineMs / 1000 + ":R>" : "";
                 Message msg = ch.sendMessage("<@" + captain + "> 🎯 it's your pick (#" + (d.nextPickIndex() + 1)
-                        + ")! I couldn't DM you — run `/draft` here and press 🎯 **Pick Player**" + clock + ".").complete();
+                        + ")! I couldn't DM you — press 🎛️ **Open my draft panel** on the board, then 🎯 **Pick Player**" + clock + ".").complete();
                 d.lastPingMessageId = msg.getIdLong();
                 save(s);
                 return null;
@@ -1370,6 +1387,54 @@ public class DraftManager {
                 .queue(null, e -> log.debug("DM to {} failed: {}", userId, e.getMessage()));
     }
 
+    /** Button id the panel controller opens a panel for (same as /draft). */
+    public static final String OPEN_PANEL_PREFIX = "dp:open:";
+
+    /** The "Open my draft panel" button that sits under the board and the launcher. */
+    private static ActionRow openPanelRow(Faction f) {
+        return ActionRow.of(Button.primary(OPEN_PANEL_PREFIX + f.getKey(), "🎛️ Open my draft panel"));
+    }
+
+    /**
+     * Before a faction's first draft (and after Clean Up) there's no board, so the draft channel
+     * gets a small launcher message with the Open my draft panel button. Captains and players then
+     * only need to see the channel, not post in it. Caller holds the lock.
+     */
+    private void ensureLauncher(Faction f, FactionState s, Guild g) {
+        TextChannel ch = g.getTextChannelById(f.getChannelId());
+        if (ch == null) return;
+        MessageEmbed embed = new EmbedBuilder()
+                .setTitle(board.title(f))
+                .setDescription("🎃 The draft hasn't started yet.\n\n"
+                        + "Press **🎛️ Open my draft panel** below:\n"
+                        + "• **Leaders** set up captains, team names, competition times and API keys\n"
+                        + "• **Captains** name their team, and later queue and pick players\n"
+                        + "• **Everyone** can see the captains and who's taking part\n\n"
+                        + "-# Your panel is private: only you can see it.")
+                .setColor(0xE67E22)
+                .build();
+        if (s.launcherMessageId != null) {
+            try {
+                ch.editMessageEmbedsById(s.launcherMessageId, embed).setComponents(openPanelRow(f)).complete();
+                return;
+            } catch (ErrorResponseException e) {
+                if (e.getErrorResponse() != ErrorResponse.UNKNOWN_MESSAGE) {
+                    log.warn("Launcher edit failed: {}", e.getMessage());
+                    return;
+                }
+            } catch (Exception e) {
+                log.warn("Launcher edit failed: {}", e.getMessage());
+                return;
+            }
+        }
+        try {
+            s.launcherMessageId = ch.sendMessageEmbeds(embed).setComponents(openPanelRow(f)).complete().getIdLong();
+            save(s);
+        } catch (Exception e) {
+            log.warn("{}: couldn't post the launcher: {}", f.getName(), e.getMessage());
+        }
+    }
+
     private void refreshBoard(Faction f, FactionState s, Guild g) {
         Draft d = s.draft;
         if (d == null || g == null) return;
@@ -1378,7 +1443,7 @@ public class DraftManager {
         List<MessageEmbed> embeds = board.render(f, s);
         if (d.boardMessageId != null) {
             try {
-                ch.editMessageEmbedsById(d.boardMessageId, embeds).complete();
+                ch.editMessageEmbedsById(d.boardMessageId, embeds).setComponents(openPanelRow(f)).complete();
                 return;
             } catch (ErrorResponseException e) {
                 if (e.getErrorResponse() != ErrorResponse.UNKNOWN_MESSAGE) {
@@ -1392,7 +1457,7 @@ public class DraftManager {
             }
         }
         try {
-            Message msg = ch.sendMessageEmbeds(embeds).complete();
+            Message msg = ch.sendMessageEmbeds(embeds).setComponents(openPanelRow(f)).complete();
             d.boardMessageId = msg.getIdLong(); // not pinned: pinning posts a system message in the channel
         } catch (Exception e) {
             log.warn("Board post failed: {}", e.getMessage());

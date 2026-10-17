@@ -170,6 +170,13 @@ public class PanelController {
         Guild g = e.getGuild();
         long ch = channelId(e.getChannel());
 
+        // The "Open my draft panel" button on the board/launcher: a fresh private panel, like /draft.
+        if (action.equals("open")) {
+            e.deferReply(true).queue();
+            workers.submit(() -> open(e.getHook(), g, m, f.getKey(), ch));
+            return;
+        }
+
         // Buttons that open a pop-up form must answer straight away with the modal.
         switch (action) {
             case "addtorn" -> { e.replyModal(textModal("maddtorn:" + f.getKey(), "Add player by Torn ID",
@@ -624,7 +631,7 @@ public class PanelController {
         }
         return new Ui(BLURPLE)
                 .text("## 🏷️ Team Names")
-                .text("Choose the captain whose team you're naming. Captains can also name their own team from `/draft`.")
+                .text("Choose the captain whose team you're naming. Captains can also name their own team from their own panel.")
                 .menu(menu.build())
                 .buttons(Button.secondary(id("home", f), "Back"))
                 .build();

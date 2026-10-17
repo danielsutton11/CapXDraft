@@ -6,12 +6,16 @@ between the drafted teams.
 
 Stack: Java 21 · Spring Boot 3.3 · JDA 6 · Postgres (Railway).
 
-## Commands
+## Opening your panel
 
-There's only one:
+Everything happens in a private panel (only you can see it; it closes itself after 14 minutes).
+Two ways to open it:
 
-- **`/draft`** opens your private draft panel (only you can see it; it closes itself after 14 minutes).
-  It only works in a faction's draft channel, and opens that faction's panel. Server admins can use
+- **🎛️ Open my draft panel** — the button under the board in each faction's draft channel. Before a
+  draft (and after Clean Up) the channel has a small launcher message with the same button. This
+  only needs **View Channel**, so captains and players don't need to be able to post there and the
+  board stays the only message.
+- **`/draft`** — the same panel, for anyone who can type in the draft channel. Server admins can use
   it anywhere and pick a faction with the `faction` option.
 
 Everything else, picking included, happens through the panel's buttons, dropdowns and pop-up forms.
@@ -80,7 +84,7 @@ A read-only status view: who's on the clock, the captains and their teams, and t
 - **Teams:** naming a team creates a team role, a team captain role (given only to that team's
   captain) and a text + voice channel in the team category. Only the team (plus any roles in
   `team-channel-role-ids`, empty by default) and the bot can see them. The captain role can also see
-  the faction's draft channel. Players get the team role as they're picked; renaming updates both
+  the faction's draft channel (View Channel and Read Message History — the board's button does the rest). Players get the team role as they're picked; renaming updates both
   roles and the channels.
 - **Replace Captain** moves the team, queue and turn to the new captain. If the new captain was in
   the participants or already drafted (matched by Discord ID or Torn ID), they're taken out — a

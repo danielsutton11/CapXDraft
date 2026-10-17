@@ -39,8 +39,9 @@ public class TeamService {
             Permission.VIEW_CHANNEL, Permission.MANAGE_CHANNEL, Permission.MESSAGE_SEND);
     private static final EnumSet<Permission> BOT_VOICE = EnumSet.of(
             Permission.VIEW_CHANNEL, Permission.MANAGE_CHANNEL, Permission.VOICE_CONNECT);
+    /** Captains only need to see the draft channel: the board's button opens their panel. */
     private static final EnumSet<Permission> CAPTAIN_CHANNEL_ALLOW = EnumSet.of(
-            Permission.VIEW_CHANNEL, Permission.MESSAGE_HISTORY, Permission.USE_APPLICATION_COMMANDS);
+            Permission.VIEW_CHANNEL, Permission.MESSAGE_HISTORY);
     private static final EnumSet<Permission> NONE = EnumSet.noneOf(Permission.class);
     private static final EnumSet<Permission> HIDE = EnumSet.of(Permission.VIEW_CHANNEL);
 

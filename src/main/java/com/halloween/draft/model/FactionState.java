@@ -17,6 +17,8 @@ public class FactionState {
 
     /** Pool prepared before the draft (/buildpool), reviewed and trimmed by leadership. */
     public List<Player> pool;
+    /** The "open your panel" message in the draft channel while there's no board. */
+    public Long launcherMessageId;
     /** Players leadership removed before the draft; a rebuild won't add them back. */
     public Set<Long> excludedIds = new HashSet<>();      // Player.id values
     public Set<Long> excludedTornIds = new HashSet<>();
