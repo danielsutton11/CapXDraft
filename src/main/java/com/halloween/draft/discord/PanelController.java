@@ -172,8 +172,8 @@ public class PanelController {
 
         // The "Open my draft panel" button on the board/launcher: a fresh private panel, like /draft.
         if (action.equals("open")) {
-            e.deferReply(true).queue();
-            workers.submit(() -> open(e.getHook(), g, m, f.getKey(), ch));
+            e.deferReply(true).queue(ok -> workers.submit(() -> open(e.getHook(), g, m, f.getKey(), ch)),
+                    PanelController::expired);
             return;
         }
 
@@ -201,9 +201,8 @@ public class PanelController {
             default -> { }
         }
 
-        e.deferEdit().queue();
         InteractionHook hook = e.getHook();
-        run(hook, g, m, f, () -> switch (action) {
+        Supplier<View> work = () -> switch (action) {
             case "home" -> home(g, m, f, null);
             case "setcap" -> setCaptainsView(f);
             case "setcapok" -> {
@@ -258,7 +257,10 @@ public class PanelController {
             case "qclr" -> captainHome(g, m, f, drafts.queueClear(m, f.getChannelId()));
             case "qrm" -> queueRemoveView(f, m);
             default -> home(g, m, f, "❌ Unknown action.");
-        });
+        };
+        // Only act once Discord has accepted the click: if it was too late, the user saw
+        // "interaction failed", so nothing should happen behind their back.
+        e.deferEdit().queue(ok -> run(hook, g, m, f, work), PanelController::expired);
     }
 
     public void onStringSelect(StringSelectInteractionEvent e) {
@@ -276,8 +278,8 @@ public class PanelController {
             return;
         }
 
-        e.deferEdit().queue();
-        run(e.getHook(), g, m, f, () -> switch (action) {
+        InteractionHook hook = e.getHook();
+        Supplier<View> work = () -> switch (action) {
             case "replold" -> replaceNewView(g, f, Long.parseLong(values.get(0)));
             case "rmsel" -> home(g, m, f, drafts.removePlayers(g, m, f.getKey(), ch, values));
             case "apsel" -> home(g, m, f, drafts.adminPick(g, m, f.getKey(), ch, values.get(0)));
@@ -289,7 +291,10 @@ public class PanelController {
             case "sttimer" -> startView(f, Integer.parseInt(values.get(0)), a[2].equals("1"), a[3].equals("1"));
             case "keyrm" -> keysView(f, competitions.removeKey(m, f, Long.parseLong(values.get(0))));
             default -> home(g, m, f, "❌ Unknown action.");
-        });
+        };
+        // Only act once Discord has accepted the click: if it was too late, the user saw
+        // "interaction failed", so nothing should happen behind their back.
+        e.deferEdit().queue(ok -> run(hook, g, m, f, work), PanelController::expired);
     }
 
     public void onEntitySelect(EntitySelectInteractionEvent e) {
@@ -301,8 +306,8 @@ public class PanelController {
         long ch = channelId(e.getChannel());
         List<Member> picked = e.getMentions().getMembers();
 
-        e.deferEdit().queue();
-        run(e.getHook(), g, m, f, () -> switch (action) {
+        InteractionHook hook = e.getHook();
+        Supplier<View> work = () -> switch (action) {
             case "setcapusers" -> {
                 if (picked.stream().anyMatch(x -> x.getUser().isBot())) throw new UserError("Bots can't be captains.");
                 pendingCaptains.put(key(m, f), picked.stream().map(Member::getIdLong).toList());
@@ -315,7 +320,10 @@ public class PanelController {
                 yield home(g, m, f, drafts.replaceCaptain(g, m, f.getKey(), ch, old, picked.get(0)));
             }
             default -> home(g, m, f, "❌ Unknown action.");
-        });
+        };
+        // Only act once Discord has accepted the click: if it was too late, the user saw
+        // "interaction failed", so nothing should happen behind their back.
+        e.deferEdit().queue(ok -> run(hook, g, m, f, work), PanelController::expired);
     }
 
     public void onModal(ModalInteractionEvent e) {
@@ -327,8 +335,8 @@ public class PanelController {
         long ch = channelId(e.getChannel());
         String text = modalValue(e, "text");
 
-        e.deferEdit().queue();
-        run(e.getHook(), g, m, f, () -> switch (action) {
+        InteractionHook hook = e.getHook();
+        Supplier<View> work = () -> switch (action) {
             case "mname" -> {
                 long captainId = Long.parseLong(a[2]);
                 Member captain = g.getMemberById(captainId);
@@ -352,7 +360,10 @@ public class PanelController {
             case "mqq" -> resultsView(f, text, "qaddsel", "Choose a player to queue", false, 1);
             case "mpkq" -> resultsView(f, text, "pksel", "Choose your pick", false, 1);
             default -> home(g, m, f, "❌ Unknown action.");
-        });
+        };
+        // Only act once Discord has accepted the click: if it was too late, the user saw
+        // "interaction failed", so nothing should happen behind their back.
+        e.deferEdit().queue(ok -> run(hook, g, m, f, work), PanelController::expired);
     }
 
     // =====================================================================
@@ -950,6 +961,11 @@ public class PanelController {
     // =====================================================================
     // Helpers
     // =====================================================================
+
+    /** The click reached us too late to acknowledge (over 3 seconds, or answered elsewhere). */
+    private static void expired(Throwable err) {
+        log.warn("Interaction couldn't be acknowledged, so it was ignored: {}", err.getMessage());
+    }
 
     /** Runs an action off the event thread and puts its screen (or the error) on the panel. */
     private void run(InteractionHook hook, Guild g, Member m, Faction f, Supplier<View> action) {

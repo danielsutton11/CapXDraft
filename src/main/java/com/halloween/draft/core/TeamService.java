@@ -81,8 +81,7 @@ public class TeamService {
         team.captainRoleId = captainRole.getIdLong();
         // New roles land at the bottom of the list - move them up under the bot's own role,
         // team role first, then the captain role above it.
-        moveBelowBot(guild, role);
-        moveBelowBot(guild, captainRole);
+        moveBelowBot(guild, captainRole, role); // highest first: captain role above team role
         List<Role> extraRoles = props.getTeamChannelRoleIds().stream()
                 .map(guild::getRoleById).filter(java.util.Objects::nonNull).toList();
         Set<String> refused = new TreeSet<>();
@@ -184,41 +183,62 @@ public class TeamService {
         }
     }
 
+    /** Role reordering rewrites positions server-wide, so only one runs at a time (all factions). */
+    private static final Object ROLE_ORDER_LOCK = new Object();
+
     /**
-     * Moves a role to sit directly below the bot's own integration role ("Halloween Draft Bot"),
-     * or its highest role if it has no integration role. Failure is logged, not fatal.
+     * Moves roles to sit directly below the bot's own integration role ("Halloween Draft Bot"), or
+     * its highest role if it has no integration role, keeping the order given (highest first).
+     * All moves go in one request, so two reorders can never work from an out-of-date role list.
+     * Retries once with a fresh list; failure is logged, not fatal.
      */
-    private void moveBelowBot(Guild guild, Role role) {
-        try {
-            List<Role> botRoles = guild.getSelfMember().getRoles(); // highest first
-            if (botRoles.isEmpty()) return;
-            Role anchor = botRoles.stream().filter(Role::isManaged).findFirst().orElse(botRoles.get(0));
+    private void moveBelowBot(Guild guild, Role... highestFirst) {
+        synchronized (ROLE_ORDER_LOCK) {
+            for (int attempt = 1; attempt <= 2; attempt++) {
+                try {
+                    List<Role> botRoles = guild.getSelfMember().getRoles(); // highest first
+                    if (botRoles.isEmpty()) return;
+                    Role anchor = botRoles.stream().filter(Role::isManaged).findFirst().orElse(botRoles.get(0));
 
-            var order = guild.modifyRolePositions();
-            List<Role> current = order.getCurrentOrder();
-            int anchorIdx = current.indexOf(anchor);
-            int roleIdx = current.indexOf(role);
-            if (anchorIdx < 0 || roleIdx < 0 || current.size() < 2) return;
+                    var order = guild.modifyRolePositions();
+                    List<Role> start = order.getCurrentOrder();
+                    if (start.size() < 2 || start.indexOf(anchor) < 0) return;
+                    // Work out the list direction from real positions rather than trusting a flag:
+                    // "topFirst" means a lower index is higher up the role list.
+                    boolean topFirst = start.get(0).getPosition() > start.get(start.size() - 1).getPosition();
 
-            // Work out the list direction from real positions rather than trusting a flag:
-            // "topFirst" means a lower index is higher up the role list.
-            boolean topFirst = current.get(0).getPosition() > current.get(current.size() - 1).getPosition();
-
-            // moveTo removes the role then re-inserts it at the target index.
-            int target;
-            if (topFirst) {
-                // directly below = the next index; removing a role after the anchor doesn't shift it
-                target = roleIdx > anchorIdx ? anchorIdx + 1 : anchorIdx;
-            } else {
-                // directly below = the previous index; removing a role before the anchor shifts it down one
-                target = roleIdx < anchorIdx ? anchorIdx - 1 : anchorIdx;
+                    boolean changed = false;
+                    // Lowest role first: each one is put directly under the anchor, pushing the
+                    // earlier ones down, so they end up in the order given.
+                    for (int i = highestFirst.length - 1; i >= 0; i--) {
+                        Role role = highestFirst[i];
+                        List<Role> current = order.getCurrentOrder();
+                        int anchorIdx = current.indexOf(anchor);
+                        int roleIdx = current.indexOf(role);
+                        if (anchorIdx < 0 || roleIdx < 0) continue;
+                        // moveTo removes the role then re-inserts it at the target index.
+                        int target = topFirst
+                                ? (roleIdx > anchorIdx ? anchorIdx + 1 : anchorIdx)
+                                : (roleIdx < anchorIdx ? anchorIdx - 1 : anchorIdx);
+                        if (target == roleIdx) continue;
+                        order.selectPosition(role).moveTo(target);
+                        changed = true;
+                    }
+                    if (!changed) return;
+                    order.complete();
+                    log.info("Moved {} under {}", java.util.Arrays.stream(highestFirst).map(Role::getName).toList(),
+                            anchor.getName());
+                    return;
+                } catch (Exception e) {
+                    log.warn("Couldn't move roles under the bot's role (attempt {}): {}", attempt, e.toString());
+                    try {
+                        Thread.sleep(2_000); // let Discord's role list settle, then try with a fresh copy
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
             }
-            log.info("Moving role {} (index {}) under {} (index {}), topFirst={}, target {}",
-                    role.getName(), roleIdx, anchor.getName(), anchorIdx, topFirst, target);
-            if (target == roleIdx) return;
-            order.selectPosition(role).moveTo(target).complete();
-        } catch (Exception e) {
-            log.warn("Couldn't move role {} under the bot's role: {}", role.getName(), e.toString());
         }
     }
 
