@@ -142,6 +142,42 @@ public class DraftManager {
                 log.error("Failed to resume draft for {}", f.getKey(), e);
             }
         }
+        // If the board or launcher gets deleted (by hand, a purge bot...), put it back within a few minutes.
+        timers.every(5 * 60_000, 5 * 60_000, this::healDraftChannels);
+    }
+
+    /**
+     * Makes sure every draft channel still has its message with the Open my draft panel button:
+     * the board once a draft exists, the launcher before that. Editing an existing message is a
+     * no-op for viewers; a missing one is posted again.
+     */
+    void healDraftChannels() {
+        JDA j = jda;
+        if (j == null) return;
+        for (Faction f : props.getFactions()) {
+            if (broken.contains(f.getKey())) continue;
+            try {
+                withLock(f.getKey(), () -> {
+                    FactionState s = state(f);
+                    TextChannel home = j.getTextChannelById(f.getChannelId());
+                    if (home == null) {
+                        log.warn("{}: draft channel {} not found", f.getName(), f.getChannelId());
+                        return null;
+                    }
+                    Guild g = home.getGuild();
+                    if (s.draft == null) {
+                        ensureLauncher(f, s, g);
+                    } else {
+                        Long before = s.draft.boardMessageId;
+                        refreshBoard(f, s, g);
+                        if (!Objects.equals(before, s.draft.boardMessageId)) save(s);
+                    }
+                    return null;
+                });
+            } catch (Exception e) {
+                log.warn("{}: draft channel check failed: {}", f.getName(), e.getMessage());
+            }
+        }
     }
 
     // =====================================================================
