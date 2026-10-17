@@ -190,9 +190,9 @@ public class DraftManager {
     public Faction resolveViewFaction(Member m, String option, long channelId) {
         if (!m.hasPermission(Permission.ADMINISTRATOR)) {
             Faction here = props.factionForChannel(channelId)
-                    .orElseThrow(() -> new UserError("Use `/draft` in your faction's draft channel."));
+                    .orElseThrow(() -> new UserError("Use the 🎛️ **Open my draft panel** button in your faction's draft channel."));
             if (option != null && !option.isBlank() && !option.equalsIgnoreCase(here.getKey())) {
-                throw new UserError("This is the " + here.getName() + " draft channel — use `/draft` in the other "
+                throw new UserError("This is the " + here.getName() + " draft channel — use the 🎛️ **Open my draft panel** button in the other "
                         + "faction's channel to open theirs.");
             }
             return here;
