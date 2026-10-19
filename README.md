@@ -41,11 +41,25 @@ before the next draft.
 ### Captain panel
 Where you are in the order (with the countdown), and **🎯 Pick Player** when you're on the clock
 (search, then choose). Then your **queue** — Queue Player, Unqueue, Clear — and your picks, plus
-Name/Rename Team and Participants. Queued players are picked for you automatically when your turn
+Name/Rename Team, 🖼️ Team Image and Participants. Queued players are picked for you automatically when your turn
 starts. The queue limit is `max-queue` in the config.
 
 A leader who's also a captain lands on their captain panel while it's their pick; the 🎛️ Control
 Panel button always takes them to the leader panel.
+
+### Team images
+Once a team is named, its captain can add an image from their panel (🖼️ Team Image → choose a
+file). PNG, JPG or GIF up to 8 MB; animated GIFs up to 2 MB, kept as uploaded so they stay
+animated. Stills are shrunk to 512 px. The image shows:
+- next to the team on the draft board,
+- beside each team in the scoreboard's 📊 Team breakdown,
+- on the scoreboard while the team leads outright, and large on the 🏁 Final results for the winner,
+- as the team role's and captain role's **role icon** (the server needs boost level 2; animated
+  GIFs use their first frame).
+
+Images are stored in Postgres (Discord's own file links expire after about a day) and attached to
+the messages that show them, re-uploaded only when they change. Leaders can set, replace or remove any
+team's image from 🖼️ Team Images on their panel, and the captain is DM'd. Clean Up deletes them.
 
 ### Everyone else
 A read-only status view: who's on the clock, the captains and their teams, and the participants.
@@ -58,7 +72,7 @@ A read-only status view: who's on the clock, the captains and their teams, and t
 - **Clean Up is per faction.** It deletes that faction's teams (roles, text and voice channels),
   participant list, removals and competition, clears the bot's messages from its draft channel,
   removes its scoreboard from the live scores channel, and permanently deletes its stored attack
-  records and API keys (two new keys are needed before the next draft). Other factions are untouched. It's blocked
+  records, API keys and team images (two new keys are needed before the next draft). Other factions are untouched. It's blocked
   while the faction's draft is running or its competition is live.
 - **Rosters lock while the competition is live.** Undo, Add, Remove, Admin Pick and Replace Captain
   are refused until it ends, because scores follow whoever is on each team. Captains can still pick
@@ -153,7 +167,7 @@ There's no web port, so leave the healthcheck off.
 
 - **Server Members Intent** must be enabled in the developer portal.
 - **Bot permissions:** Manage Roles, Manage Channels, Manage Messages, View Channels, Send Messages,
-  Embed Links, Connect.
+  Embed Links, Attach Files (team images), Connect.
 - **Role order:** team roles and team captain roles are placed under the bot's own role automatically.
 - **Command channels (optional):** Server Settings → Integrations → the bot → `/draft` can be limited
   to the five draft channels. The bot enforces this itself too, except for server admins.

@@ -52,7 +52,7 @@ class RollbackTest {
         f.setKey("a");
         f.setName("A");
         props.setFactions(List.of(f));
-        DraftManager dm = new DraftManager(props, repo, null, null, null, null, null);
+        DraftManager dm = new DraftManager(props, repo, null, null, null, null, null, null);
         dm.load();
         return dm;
     }
