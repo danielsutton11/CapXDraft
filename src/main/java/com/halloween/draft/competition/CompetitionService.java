@@ -452,39 +452,76 @@ public class CompetitionService {
                 .setColor(colour)
                 .addField("Starts", DraftManager.tct(c.startEpoch) + " TCT", true)
                 .addField("Ends", DraftManager.tct(c.endEpoch) + " TCT", true);
+        boolean anyLeft = false;
         if (teams.isEmpty()) {
             main.addField("Teams", "*No teams yet — they appear once the draft has run.*", false);
         } else {
             main.addField("Total hits", "**" + total + "**", true);
-            // One column per team, ranked, each with its top hitters.
+            // Two aligned tables: teams ranked by total, then the top hitters across every team.
+            // Code blocks keep the columns straight and stop names being read as formatting.
+            int teamWidth = Math.min(TEAM_WIDTH, teams.stream().mapToInt(t -> t.name().length()).max().orElse(4));
+            int rankWidth = String.valueOf(teams.size()).length() + 1;
+            int teamDigits = String.valueOf(Math.max(total, 0)).length();
+            StringBuilder standings = new StringBuilder("```\n");
             for (int i = 0; i < teams.size(); i++) {
                 TeamScore t = teams.get(i);
-                StringBuilder body = new StringBuilder();
-                int shown = 0;
-                for (Hitter h : t.hitters()) {
-                    if (shown >= TOP_HITTERS) break;
-                    body.append('`').append(++shown).append("` ").append(h.name())
-                            .append(h.left() ? " *(left faction)*" : "").append(" · **").append(h.hits()).append("**\n");
+                standings.append(pad((i + 1) + ".", rankWidth)).append(' ')
+                        .append(pad(t.name(), teamWidth)).append("  ")
+                        .append(String.format("%" + teamDigits + "d", t.total())).append('\n');
+            }
+            standings.append("```");
+            main.addField("🏆 Team standings", standings.toString(), false);
+
+            record Row(String name, int hits, String team, boolean left) {}
+            List<Row> hitters = new ArrayList<>();
+            for (TeamScore t : teams) {
+                for (Hitter h : t.hitters()) hitters.add(new Row(cleanName(h.name()), h.hits(), t.name(), h.left()));
+            }
+            hitters.sort(Comparator.comparingInt(Row::hits).reversed().thenComparing(Row::name, String.CASE_INSENSITIVE_ORDER));
+            List<Row> top = hitters.stream().filter(r -> r.hits() > 0).limit(TOP_OVERALL).toList();
+            if (top.isEmpty()) {
+                main.addField("⚔️ Top hitters", "*No hits yet.*", false);
+            } else {
+                int nameWidth = Math.min(NAME_WIDTH, top.stream().mapToInt(r -> r.name().length() + (r.left() ? 1 : 0)).max().orElse(4));
+                int hitDigits = String.valueOf(top.get(0).hits()).length();
+                int teamCol = Math.min(TEAM_WIDTH, top.stream().mapToInt(r -> r.team().length()).max().orElse(4));
+                StringBuilder table = new StringBuilder("```\n");
+                for (Row r : top) {
+                    table.append(pad(r.name() + (r.left() ? "*" : ""), nameWidth)).append("  ")
+                            .append(String.format("%" + hitDigits + "d", r.hits())).append("  ")
+                            .append(pad(r.team(), teamCol).stripTrailing()).append('\n');
                 }
-                int rest = t.hitters().size() - shown;
-                if (rest > 0) {
-                    int restHits = t.hitters().stream().skip(shown).mapToInt(Hitter::hits).sum();
-                    body.append("*+").append(rest).append(" more · ").append(restHits).append("*");
-                }
-                String rank = i < MEDALS.length ? MEDALS[i] : "`" + (i + 1) + ".`";
-                main.addField(rank + " " + t.name() + " · " + t.total() + (t.total() == 1 ? " hit" : " hits"),
-                        body.length() == 0 ? "*No members*" : body.toString(), true);
+                table.append("```");
+                main.addField("⚔️ Top hitters", table.toString(), false);
+                anyLeft = top.stream().anyMatch(Row::left);
             }
         }
 
         String updated = c.lastCheckedMs == null ? "Not checked yet"
                 : "Updated " + DraftManager.tct(c.lastCheckedMs / 1000).substring(11) + " TCT";
-        main.setFooter("Successful outgoing hits by drafted players · family factions excluded\n" + updated);
+        main.setFooter("Successful outgoing hits by drafted players · family factions excluded"
+                + (anyLeft ? " · * left the faction" : "") + " · " + updated);
 
         List<MessageEmbed> embeds = new ArrayList<>();
         embeds.add(main.build());
 
         return embeds;
+    }
+
+    private static final int NAME_WIDTH = 18;
+    private static final int TEAM_WIDTH = 24;
+    private static final int TOP_OVERALL = 15;
+
+    /** "Blaz [3828215]" → "Blaz"; backticks removed so they can't break the table. */
+    static String cleanName(String display) {
+        String name = display == null ? "" : display.replaceAll("\\s*\\[\\d{1,10}]", "").replace("`", "'").trim();
+        return name.isEmpty() ? "Unknown" : name;
+    }
+
+    /** Pads (or trims with …) to exactly {@code width} characters. */
+    static String pad(String s, int width) {
+        if (s.length() > width) return s.substring(0, width - 1) + "…";
+        return s + " ".repeat(width - s.length());
     }
 
     private String eventName() {
