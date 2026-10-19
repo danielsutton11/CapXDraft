@@ -7,6 +7,7 @@ import com.halloween.draft.config.BotProperties.Faction;
 import com.halloween.draft.core.DraftManager;
 import com.halloween.draft.core.DraftManager.RosterMember;
 import com.halloween.draft.core.DraftManager.TeamRoster;
+import com.halloween.draft.core.TeamImageService;
 import com.halloween.draft.core.TornService;
 import com.halloween.draft.core.UserError;
 import com.halloween.draft.model.Competition;
@@ -21,6 +22,7 @@ import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.exceptions.ErrorResponseException;
 import net.dv8tion.jda.api.requests.ErrorResponse;
+import net.dv8tion.jda.api.utils.FileUpload;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -75,6 +77,7 @@ public class CompetitionService {
     private final TornAttackClient torn;
     private final TornService tornService;
     private final KeyCrypto crypto;
+    private final TeamImageService images;
     private final AtomicInteger rotation = new AtomicInteger();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "competition");
@@ -89,13 +92,15 @@ public class CompetitionService {
     private volatile JDA jda;
 
     public CompetitionService(BotProperties props, DraftManager drafts, CompetitionRepository repo,
-                              TornAttackClient torn, TornService tornService, KeyCrypto crypto) {
+                              TornAttackClient torn, TornService tornService, KeyCrypto crypto,
+                              TeamImageService images) {
         this.props = props;
         this.drafts = drafts;
         this.repo = repo;
         this.torn = torn;
         this.tornService = tornService;
         this.crypto = crypto;
+        this.images = images;
     }
 
     /** Starts the once-a-minute loop and the hourly key check. Called when the bot has connected. */
@@ -324,7 +329,7 @@ public class CompetitionService {
             throw new UserError(secret == null || secret.isBlank()
                     ? "KEY_ENCRYPTION_SECRET isn't set on the server, so keys can't be stored safely."
                     : "KEY_ENCRYPTION_SECRET is too short (" + secret.length()
-                    + " characters) — it needs at least 16, so keys can't be stored safely.");
+                      + " characters) — it needs at least 16, so keys can't be stored safely.");
         }
         if (f.getTornFactionId() <= 0) throw new UserError("No Torn faction ID is configured for " + f.getName() + ".");
         TornAttackClient.KeyOwner owner = torn.verify(rawKey.trim(), f.getTornFactionId(), f.getName());
@@ -386,10 +391,21 @@ public class CompetitionService {
                 }
                 return;
             }
-            List<MessageEmbed> embeds = render(f, c);
+            // The leading team's image (the winner's, large, on the final results) is attached to the
+            // message, and only re-uploaded when it changes: an edit without files keeps it.
+            List<TeamScore> teams = teamScores(f);
+            TeamScore featured = featured(c, teams);
+            String wanted = featured == null ? "" : TeamImageService.fileName(featured.imageId(), featured.imageExt());
+            boolean upload = !wanted.equals(c.scoreboardImageSig == null ? "" : c.scoreboardImageSig);
             if (c.scoreboardMessageId != null) {
                 try {
-                    ch.editMessageEmbedsById(c.scoreboardMessageId, embeds).setComponents(teamsButtonRow(f)).complete();
+                    FileUpload file = upload && featured != null ? images.upload(featured.imageId(), featured.imageExt()) : null;
+                    String shown = upload ? (file == null ? null : file.getName()) : (wanted.isEmpty() ? null : wanted);
+                    var edit = ch.editMessageEmbedsById(c.scoreboardMessageId, render(f, c, teams, shown))
+                            .setComponents(teamsButtonRow(f));
+                    if (upload) edit = edit.setFiles(file == null ? List.<FileUpload>of() : List.of(file));
+                    edit.complete();
+                    if (upload) drafts.updateCompetition(f, x -> x.scoreboardImageSig = shown == null ? "" : shown);
                     return;
                 } catch (ErrorResponseException e) {
                     if (e.getErrorResponse() != ErrorResponse.UNKNOWN_MESSAGE) {
@@ -399,8 +415,14 @@ public class CompetitionService {
                 }
             }
             try {
-                Message msg = ch.sendMessageEmbeds(embeds).setComponents(teamsButtonRow(f)).complete();
-                drafts.updateCompetition(f, x -> x.scoreboardMessageId = msg.getIdLong());
+                FileUpload file = featured == null ? null : images.upload(featured.imageId(), featured.imageExt());
+                String shown = file == null ? null : file.getName();
+                Message msg = ch.sendMessageEmbeds(render(f, c, teams, shown)).setComponents(teamsButtonRow(f))
+                        .setFiles(file == null ? List.<FileUpload>of() : List.of(file)).complete();
+                drafts.updateCompetition(f, x -> {
+                    x.scoreboardMessageId = msg.getIdLong();
+                    x.scoreboardImageSig = shown == null ? "" : shown;
+                });
             } catch (Exception e) {
                 log.warn("Scoreboard post failed: {}", e.getMessage());
             }
@@ -410,7 +432,7 @@ public class CompetitionService {
     /** One player's score; {@code name} is their display name without the [ID]. */
     public record Hitter(String name, int hits, boolean left) {}
     /** A team's total and every member's hits, highest first. */
-    public record TeamScore(String name, int total, List<Hitter> hitters) {}
+    public record TeamScore(String name, int total, List<Hitter> hitters, Long imageId, String imageExt) {}
 
     /** Every team's score for the faction's competition, best team first. Empty before the draft. */
     public List<TeamScore> teamScores(Faction f) {
@@ -429,7 +451,8 @@ public class CompetitionService {
             }
             hitters.sort(Comparator.comparingInt(Hitter::hits).reversed()
                     .thenComparing(Hitter::name, String.CASE_INSENSITIVE_ORDER));
-            teams.add(new TeamScore(t.teamName(), hitters.stream().mapToInt(Hitter::hits).sum(), hitters));
+            teams.add(new TeamScore(t.teamName(), hitters.stream().mapToInt(Hitter::hits).sum(), hitters,
+                    t.imageId(), t.imageExt()));
         }
         teams.sort(Comparator.comparingInt(TeamScore::total).reversed());
         return teams;
@@ -442,9 +465,20 @@ public class CompetitionService {
         return ActionRow.of(Button.secondary(TEAMS_BUTTON_PREFIX + f.getKey(), "📊 Team breakdown"));
     }
 
-    private List<MessageEmbed> render(Faction f, Competition c) {
+    /**
+     * The team whose image the scoreboard shows: the outright leader once there are hits (no image
+     * on a tie), and the winner on the final results. Null if that team has no image.
+     */
+    static TeamScore featured(Competition c, List<TeamScore> teams) {
+        if (teams.isEmpty() || c.startEpoch == null) return null;
+        TeamScore top = teams.get(0);
+        if (top.total() <= 0 || (teams.size() > 1 && teams.get(1).total() == top.total())) return null;
+        return top.imageId() == null ? null : top;
+    }
+
+    /** {@code imageFile}: the attached team image to show, or null — large on the final results, small otherwise. */
+    private List<MessageEmbed> render(Faction f, Competition c, List<TeamScore> teams, String imageFile) {
         long now = Instant.now().getEpochSecond();
-        List<TeamScore> teams = teamScores(f);
         int total = teams.stream().mapToInt(TeamScore::total).sum();
 
         // Status heading and colour: green while live, orange before, grey while the last hits come in, gold when final.
@@ -519,6 +553,11 @@ public class CompetitionService {
                 : "Updated " + DraftManager.tct(c.lastCheckedMs / 1000).substring(11) + " TCT";
         main.setFooter("Successful outgoing hits by drafted players · family factions excluded"
                 + (anyLeft ? " · * left the faction" : "") + " · " + updated);
+
+        if (imageFile != null) {
+            if (c.finalPosted) main.setImage("attachment://" + imageFile);
+            else main.setThumbnail("attachment://" + imageFile);
+        }
 
         List<MessageEmbed> embeds = new ArrayList<>();
         embeds.add(main.build());

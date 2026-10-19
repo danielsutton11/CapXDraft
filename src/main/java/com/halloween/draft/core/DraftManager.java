@@ -71,6 +71,7 @@ public class DraftManager {
     private final TornService torn;
     private final TimerService timers;
     private final com.halloween.draft.competition.CompetitionRepository competitionRepo;
+    private final TeamImageService images;
 
     private final Map<String, FactionState> states = new ConcurrentHashMap<>();
     private final Map<String, ReentrantLock> locks = new ConcurrentHashMap<>();
@@ -81,7 +82,8 @@ public class DraftManager {
 
     public DraftManager(BotProperties props, StateRepository repo, BoardRenderer board,
                         TeamService teams, TornService torn, TimerService timers,
-                        com.halloween.draft.competition.CompetitionRepository competitionRepo) {
+                        com.halloween.draft.competition.CompetitionRepository competitionRepo,
+                        TeamImageService images) {
         this.props = props;
         this.repo = repo;
         this.board = board;
@@ -89,6 +91,7 @@ public class DraftManager {
         this.torn = torn;
         this.timers = timers;
         this.competitionRepo = competitionRepo;
+        this.images = images;
     }
 
     @PostConstruct
@@ -336,8 +339,8 @@ public class DraftManager {
                 if (previous.contains(id) && teamNamed(s, id)) continue;
                 dm(id, "👑 You're a **" + f.getName() + "** draft captain!\n"
                         + (teamNamed(s, id) ? "Your team is **" + s.teams.get(id).name + "**. "
-                        : "**Name your team:** go to <#" + f.getChannelId()
-                        + ">, press 🎛️ **Open my draft panel**, then 🏷️ **Name Team**.\n")
+                                            : "**Name your team:** go to <#" + f.getChannelId()
+                                              + ">, press 🎛️ **Open my draft panel**, then 🏷️ **Name Team**.\n")
                         + "You'll get a DM here when it's your turn to pick.");
             }
 
@@ -586,7 +589,7 @@ public class DraftManager {
             dm(newId, "🔁 You're now a " + f.getName() + " captain"
                     + (named ? " of **" + team.name + "**" : "") + ", replacing " + oldCap.getEffectiveName() + "."
                     + (named ? "" : "\n**Name your team:** go to <#" + f.getChannelId()
-                    + ">, press 🎛️ **Open my draft panel**, then 🏷️ **Name Team**."));
+                                    + ">, press 🎛️ **Open my draft panel**, then 🏷️ **Name Team**."));
             dm(oldId, "🔁 You've been replaced as a " + f.getName() + " captain by " + newCap.getEffectiveName() + ".");
             if (running) {
                 if (s.draft.status == DraftStatus.COMPLETE) finish(f, s, g);
@@ -632,7 +635,7 @@ public class DraftManager {
                 String tornName = torn.fetchName(tornId);
                 Member linked = memberByTornId(g, tornId, tornName);
                 p = linked != null ? new Player(linked.getIdLong(), linked.getEffectiveName(), tornId)
-                        : Player.tornOnly(tornId, tornName);
+                                   : Player.tornOnly(tornId, tornName);
             }
             if (s.activeCaptains().contains(p.id)) throw new UserError(p.display + " is a captain.");
 
@@ -923,6 +926,108 @@ public class DraftManager {
         return result;
     }
 
+    // =====================================================================
+    // Team images
+    // =====================================================================
+
+    /** A named team and its image (null when it has none), for the panels. */
+    public record TeamImageInfo(long captainId, String team, Long imageId, String imageExt) {
+        public boolean hasImage() {
+            return imageId != null;
+        }
+    }
+
+    /** Every named team, in captain order, with its image. */
+    public List<TeamImageInfo> teamImages(Faction f) {
+        return withLock(f.getKey(), () -> {
+            FactionState s = state(f);
+            List<Long> order = new ArrayList<>(s.draft != null ? s.draft.captainOrder : s.captains);
+            s.teams.keySet().stream().filter(id -> !order.contains(id)).forEach(order::add);
+            List<TeamImageInfo> out = new ArrayList<>();
+            for (Long cap : order) {
+                Team t = s.teams.get(cap);
+                if (t == null || t.roleId == null) continue;
+                out.add(new TeamImageInfo(cap, t.name, t.imageId, t.imageExt));
+            }
+            return out;
+        });
+    }
+
+    /** The captain's team image, or null if they have no team or no image. */
+    public TeamImageInfo teamImage(Faction f, long captainId) {
+        return teamImages(f).stream().filter(t -> t.captainId() == captainId).findFirst().orElse(null);
+    }
+
+    /** The image's file to attach to a panel, or null if it's gone. */
+    public net.dv8tion.jda.api.utils.FileUpload teamImageFile(TeamImageInfo t) {
+        return t == null ? null : images.upload(t.imageId(), t.imageExt());
+    }
+
+    public net.dv8tion.jda.api.utils.FileUpload teamImageFile(Long imageId, String imageExt) {
+        return images.upload(imageId, imageExt);
+    }
+
+    /**
+     * A captain sets (or replaces) their team's image. It's checked and shrunk first, then shown on
+     * the board straight away and used as the team's role icon when the server allows it.
+     */
+    public String setTeamImage(Guild g, Member invoker, Faction f, byte[] raw, Long forCaptain) {
+        long me = forCaptain != null ? forCaptain : invoker.getIdLong();
+        boolean onBehalf = me != invoker.getIdLong();
+        if (onBehalf && !isLeader(invoker, f)) {
+            throw new UserError("Only " + f.getName() + " leadership can set another team's image.");
+        }
+        TeamImageService.Processed p = TeamImageService.process(raw); // outside the lock: decoding takes a moment
+        return withLock(f.getKey(), () -> {
+            FactionState s = state(f);
+            Team team = s.teams.get(me);
+            if (team == null || team.roleId == null) {
+                throw new UserError(onBehalf ? "That team hasn't been named yet."
+                        : s.activeCaptains().contains(me) ? "Name your team first, then add its image."
+                        : "Only " + f.getName() + " captains can set a team image.");
+            }
+            Long old = team.imageId;
+            team.imageId = images.save(f.getKey(), p, me);
+            team.imageExt = p.ext();
+            String iconProblem = p.icon() == null ? "the image couldn't be made small enough"
+                    : teams.setRoleIcons(g, team, p.icon());
+            commit(f, s, g);
+            if (old != null) images.delete(old);
+            if (onBehalf) {
+                dm(me, "🖼️ " + f.getName() + " leadership set the image for **" + team.name
+                        + "**. You can change or remove it from your draft panel.");
+            }
+            String whose = onBehalf ? "the team's" : "your team's";
+            return "🖼️ **" + team.name + "**'s image is saved" + (p.animated() ? " (animated)" : "")
+                    + ". It shows on the draft board, the 📊 Team breakdown and the scoreboard while the team leads"
+                    + (iconProblem == null ? ", and as " + whose + " role icon." : ".\n-# No role icon: " + iconProblem + ".");
+        });
+    }
+
+    /** Takes a team's image off. Leaders can remove any team's; captains their own. */
+    public String removeTeamImage(Guild g, Member invoker, Faction f, long captainId) {
+        boolean leader = isLeader(invoker, f);
+        if (!leader && invoker.getIdLong() != captainId) {
+            throw new UserError("Only " + f.getName() + " leadership or the team's captain can remove its image.");
+        }
+        return withLock(f.getKey(), () -> {
+            FactionState s = state(f);
+            Team team = s.teams.get(captainId);
+            if (team == null || team.imageId == null) throw new UserError("That team doesn't have an image.");
+            long old = team.imageId;
+            team.imageId = null;
+            team.imageExt = null;
+            teams.setRoleIcons(g, team, null);
+            commit(f, s, g);
+            images.delete(old);
+            if (invoker.getIdLong() != captainId) {
+                dm(captainId, "🖼️ " + f.getName() + " leadership removed the image for **" + team.name
+                        + "**. You can add a new one from your draft panel.");
+            }
+            return "🖼️ Removed **" + team.name + "**'s image.";
+        });
+    }
+
     private Faction captainFactionFor(Member captain, long channelId, boolean onBehalf) {
         try {
             return resolveCaptainFaction(captain.getIdLong(), channelId, false);
@@ -1068,7 +1173,7 @@ public class DraftManager {
 
     /** A team for scoring: its name and every member's Torn ID (captain included). */
     public record RosterMember(String display, Long tornId) {}
-    public record TeamRoster(long captainId, String teamName, List<RosterMember> members) {}
+    public record TeamRoster(long captainId, String teamName, List<RosterMember> members, Long imageId, String imageExt) {}
 
     /** Teams from the faction's current/last draft, captain first. Empty when no draft exists. */
     public List<TeamRoster> rosters(Faction f) {
@@ -1083,7 +1188,9 @@ public class DraftManager {
                 members.add(new RosterMember(capName, TornService.parseTornId(capName)));
                 d.picksFor(cap).stream().filter(p -> !p.dropped)
                         .forEach(p -> members.add(new RosterMember(p.player.display, p.player.tornId)));
-                out.add(new TeamRoster(cap, s.teamName(cap, capName), members));
+                Team team = s.teams.get(cap);
+                out.add(new TeamRoster(cap, s.teamName(cap, capName), members,
+                        team == null ? null : team.imageId, team == null ? null : team.imageExt));
             }
             return out;
         });
@@ -1100,6 +1207,7 @@ public class DraftManager {
             copy.lastCheckedMs = c.lastCheckedMs;
             copy.lastError = c.lastError;
             copy.scoreboardMessageId = c.scoreboardMessageId;
+            copy.scoreboardImageSig = c.scoreboardImageSig;
             copy.finalPosted = c.finalPosted;
             copy.keysFailingNotified = c.keysFailingNotified;
             copy.draftSoonWarned = c.draftSoonWarned;
@@ -1206,6 +1314,7 @@ public class DraftManager {
         });
         int attacks = competitionRepo.deleteAttacks(f.getKey());
         int keys = competitionRepo.deleteAllKeys(f.getKey());
+        int pictures = images.deleteAll(f.getKey());
 
         return "🧹 " + f.getName() + " cleaned up: deleted " + deleted + " team" + (deleted == 1 ? "" : "s")
                 + " (roles, text and voice channels)"
@@ -1213,7 +1322,8 @@ public class DraftManager {
                 + ", cleared " + messages + " bot message" + (messages == 1 ? "" : "s") + " from <#" + f.getChannelId() + ">"
                 + (scoreboard ? ", removed the scoreboard" : "")
                 + ", deleted " + attacks + " stored attack" + (attacks == 1 ? "" : "s")
-                + " and " + keys + " API key" + (keys == 1 ? "" : "s") + ".";
+                + ", " + keys + " API key" + (keys == 1 ? "" : "s")
+                + " and " + pictures + " team image" + (pictures == 1 ? "" : "s") + ".";
     }
 
     /**
@@ -1510,10 +1620,34 @@ public class DraftManager {
         if (d == null || g == null) return;
         TextChannel ch = g.getTextChannelById(d.channelId);
         if (ch == null) return;
-        List<MessageEmbed> embeds = board.render(f, s);
+        // Team images are attached to the board message and only re-uploaded when they change;
+        // an edit without files keeps the ones already there.
+        List<String> wanted = new ArrayList<>();
+        for (Long cap : d.captainOrder) {
+            String name = TeamImageService.fileName(s.teams.get(cap));
+            if (name != null) wanted.add(name);
+        }
+        boolean upload = d.boardMessageId != null && !String.join(",", wanted).equals(d.boardImageSig);
+        List<net.dv8tion.jda.api.utils.FileUpload> files = new ArrayList<>();
+        Set<String> attached = new HashSet<>(wanted);
+        if (upload) {
+            attached.clear();
+            for (Long cap : d.captainOrder) {
+                var file = images.upload(s.teams.get(cap));
+                if (file != null) {
+                    files.add(file);
+                    attached.add(file.getName());
+                }
+            }
+        }
+        String sig = files.stream().map(net.dv8tion.jda.api.utils.FileUpload::getName).collect(Collectors.joining(","));
+        List<MessageEmbed> embeds = board.render(f, s, attached);
         if (d.boardMessageId != null) {
             try {
-                ch.editMessageEmbedsById(d.boardMessageId, embeds).setComponents(openPanelRow(f)).complete();
+                var edit = ch.editMessageEmbedsById(d.boardMessageId, embeds).setComponents(openPanelRow(f));
+                if (upload) edit = edit.setFiles(files);
+                edit.complete();
+                if (upload) d.boardImageSig = sig;
                 return;
             } catch (ErrorResponseException e) {
                 if (e.getErrorResponse() != ErrorResponse.UNKNOWN_MESSAGE) {
@@ -1527,8 +1661,18 @@ public class DraftManager {
             }
         }
         try {
-            Message msg = ch.sendMessageEmbeds(embeds).setComponents(openPanelRow(f)).complete();
+            // A new message needs every image (fresh copies: a failed edit may have used up the first ones).
+            files.clear();
+            for (Long cap : d.captainOrder) {
+                var file = images.upload(s.teams.get(cap));
+                if (file != null) files.add(file);
+            }
+            sig = files.stream().map(net.dv8tion.jda.api.utils.FileUpload::getName).collect(Collectors.joining(","));
+            embeds = board.render(f, s, files.stream().map(net.dv8tion.jda.api.utils.FileUpload::getName)
+                    .collect(Collectors.toSet()));
+            Message msg = ch.sendMessageEmbeds(embeds).setComponents(openPanelRow(f)).setFiles(files).complete();
             d.boardMessageId = msg.getIdLong(); // not pinned: pinning posts a system message in the channel
+            d.boardImageSig = sig;
         } catch (Exception e) {
             log.warn("Board post failed: {}", e.getMessage());
         }

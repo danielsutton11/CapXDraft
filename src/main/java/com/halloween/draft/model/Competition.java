@@ -12,6 +12,8 @@ public class Competition {
     public Long lastCheckedMs;
     public String lastError;
     public Long scoreboardMessageId;
+    /** Which team image the scoreboard message has attached, so it's only re-uploaded when it changes. */
+    public String scoreboardImageSig;
     public boolean finalPosted;
     public boolean keysFailingNotified;
     /** Leaders were told the competition starts soon while the draft is still running. */

@@ -31,6 +31,8 @@ public class Draft {
 
     public long channelId;
     public Long boardMessageId;
+    /** Which team images the board message has attached, so they're only re-uploaded when they change. */
+    public String boardImageSig;
     public Long lastPingMessageId;
 
     // ---------- turn order ----------

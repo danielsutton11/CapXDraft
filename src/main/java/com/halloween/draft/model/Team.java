@@ -7,6 +7,9 @@ public class Team {
     public Long captainRoleId; // "<name> Captain", held only by this team's captain
     public Long textChannelId;
     public Long voiceChannelId;
+    /** The captain's uploaded team image (a row in team_images), and its file type, e.g. "png". */
+    public Long imageId;
+    public String imageExt;
 
     public Team() {}
 

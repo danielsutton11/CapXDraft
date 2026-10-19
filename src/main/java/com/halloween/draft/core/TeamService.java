@@ -4,6 +4,7 @@ import com.halloween.draft.config.BotProperties;
 import com.halloween.draft.model.Team;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.entities.Icon;
 import net.dv8tion.jda.api.entities.IPermissionHolder;
 import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Role;
@@ -144,6 +145,30 @@ public class TeamService {
             log.warn("Gradient refused for role {} ({}), using a solid colour", role.getName(), e.getMessage());
             role.getManager().setColor(primary).queue(null, e2 -> {});
         });
+    }
+
+    /**
+     * Puts the team image on the team role and its captain role as a role icon (shown next to names
+     * in chat), or takes it off with {@code icon} null. Role icons need the server at boost level 2.
+     * @return null if it worked, otherwise a short reason it didn't
+     */
+    public String setRoleIcons(Guild guild, Team team, byte[] icon) {
+        if (!guild.getFeatures().contains("ROLE_ICONS")) {
+            return icon == null ? null : "role icons need the server at boost level 2";
+        }
+        Icon ic = icon == null ? null : Icon.from(icon, Icon.IconType.PNG);
+        String problem = null;
+        for (Long id : new Long[]{team.roleId, team.captainRoleId}) {
+            Role role = id == null ? null : guild.getRoleById(id);
+            if (role == null) continue;
+            try {
+                role.getManager().setIcon(ic).complete();
+            } catch (Exception e) {
+                log.warn("Couldn't set the role icon on {}: {}", role.getName(), e.getMessage());
+                problem = "Discord refused the role icon (" + e.getMessage() + ")";
+            }
+        }
+        return problem;
     }
 
     /** "#A475FE" → 0xA475FE; anything unreadable gives the fallback. */

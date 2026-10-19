@@ -8,12 +8,14 @@ import com.halloween.draft.core.DraftManager;
 import com.halloween.draft.core.DraftManager.CaptainInfo;
 import com.halloween.draft.core.DraftManager.CaptainView;
 import com.halloween.draft.core.DraftManager.PanelInfo;
+import com.halloween.draft.core.TeamImageService;
 import com.halloween.draft.core.UserError;
 import com.halloween.draft.model.DraftStatus;
 import com.halloween.draft.model.Player;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.components.MessageTopLevelComponent;
 import net.dv8tion.jda.api.components.actionrow.ActionRow;
+import net.dv8tion.jda.api.components.attachmentupload.AttachmentUpload;
 import net.dv8tion.jda.api.components.buttons.Button;
 import net.dv8tion.jda.api.components.container.Container;
 import net.dv8tion.jda.api.components.container.ContainerChildComponent;
@@ -21,12 +23,15 @@ import net.dv8tion.jda.api.components.label.Label;
 import net.dv8tion.jda.api.components.selections.EntitySelectMenu;
 import net.dv8tion.jda.api.components.selections.SelectOption;
 import net.dv8tion.jda.api.components.selections.StringSelectMenu;
+import net.dv8tion.jda.api.components.section.Section;
 import net.dv8tion.jda.api.components.separator.Separator;
 import net.dv8tion.jda.api.components.textdisplay.TextDisplay;
 import net.dv8tion.jda.api.components.textinput.TextInput;
 import net.dv8tion.jda.api.components.textinput.TextInputStyle;
+import net.dv8tion.jda.api.components.thumbnail.Thumbnail;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
+import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.channel.Channel;
 import net.dv8tion.jda.api.events.interaction.ModalInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
@@ -34,10 +39,12 @@ import net.dv8tion.jda.api.events.interaction.component.EntitySelectInteractionE
 import net.dv8tion.jda.api.events.interaction.component.StringSelectInteractionEvent;
 import net.dv8tion.jda.api.interactions.InteractionHook;
 import net.dv8tion.jda.api.modals.Modal;
+import net.dv8tion.jda.api.utils.FileUpload;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -108,6 +115,24 @@ public class PanelController {
             for (Button b : buttons) if (b != null) usable.add(b);
             if (!usable.isEmpty()) parts.add(ActionRow.of(usable));
             return this;
+        }
+
+        /** Text with a small image on its right; just the text when there's no image. */
+        Ui section(String markdown, FileUpload image) {
+            if (image == null) return text(markdown);
+            parts.add(Section.of(Thumbnail.fromFile(image), TextDisplay.of(markdown)));
+            return this;
+        }
+
+        /** Discord counts every component, nested ones included, up to 40 per message. */
+        int size() {
+            int n = 1; // the container
+            for (ContainerChildComponent c : parts) {
+                if (c instanceof Section) n += 3;                       // section, thumbnail, text
+                else if (c instanceof ActionRow row) n += 1 + row.getComponents().size();
+                else n += 1;
+            }
+            return n;
         }
 
         Ui menu(StringSelectMenu menu) {
@@ -201,6 +226,7 @@ public class PanelController {
             case "qadd" -> { e.replyModal(searchModal("mqq:" + f.getKey(), "Add to your queue")).queue(); return; }
             case "pk" -> { e.replyModal(searchModal("mpkq:" + f.getKey(), "Make your pick")).queue(); return; }
             case "ctimes" -> { e.replyModal(timesModal(f)).queue(); return; }
+            case "img" -> { e.replyModal(imageModal(f, null)).queue(); return; }
             case "keyadd" -> { e.replyModal(textModal("mkey:" + f.getKey(), "Add a faction API key",
                     "Limited key with Faction API Access", "16 letters and numbers", null, 16, 16)).queue(); return; }
             case "name" -> {
@@ -256,7 +282,7 @@ public class PanelController {
                                 + "the participant list, removals and competition times. It also clears the bot's board "
                                 + "and messages from <#" + f.getChannelId() + "> and the " + f.getName()
                                 + " scoreboard from the live scores channel, and permanently deletes every stored "
-                                + f.getName() + " attack record and API key (new keys are needed for the next competition).\n"
+                                + f.getName() + " attack record, API key and team image (new keys are needed for the next competition).\n"
                                 + "-# Other factions and other people's messages aren't touched.")
                         .divider()
                         .heading("Keep the captains for the next draft?")
@@ -269,6 +295,12 @@ public class PanelController {
             case "tdok" -> home(g, m, f, drafts.teardown(g, m, f, a[2].equals("1")));
             case "my" -> captainHome(g, m, f, null);
             case "keys" -> keysView(f, null);
+            case "imgs" -> teamImagesView(m, f, null);
+            case "imgrm" -> {
+                String result = drafts.removeTeamImage(g, m, f, m.getIdLong());
+                workers.submit(() -> competitions.refreshScoreboard(f));
+                yield captainHome(g, m, f, result);
+            }
             case "qclr" -> captainHome(g, m, f, drafts.queueClear(m, f.getChannelId()));
             case "qrm" -> queueRemoveView(f, m);
             default -> home(g, m, f, "❌ Unknown action.");
@@ -287,6 +319,10 @@ public class PanelController {
         long ch = channelId(e.getChannel());
         List<String> values = e.getValues();
 
+        if (action.equals("imgsetsel")) { // leader chooses a team → pop-up to upload its image
+            e.replyModal(imageModal(f, Long.parseLong(values.get(0)))).queue();
+            return;
+        }
         if (action.equals("namecap")) { // choose captain → pop-up for the name
             long captainId = Long.parseLong(values.get(0));
             e.replyModal(teamNameModal(f, captainId, currentTeamName(f, captainId))).queue();
@@ -305,6 +341,11 @@ public class PanelController {
                     values.stream().map(Long::parseLong).toList()));
             case "sttimer" -> startView(f, Integer.parseInt(values.get(0)), a[2].equals("1"), a[3].equals("1"));
             case "keyrm" -> keysView(f, competitions.removeKey(m, f, Long.parseLong(values.get(0))));
+            case "imgrmsel" -> {
+                String result = drafts.removeTeamImage(g, m, f, Long.parseLong(values.get(0)));
+                workers.submit(() -> competitions.refreshScoreboard(f));
+                yield teamImagesView(m, f, result);
+            }
             default -> home(g, m, f, "❌ Unknown action.");
         };
         // Only act once Discord has accepted the click: if it was too late, the user saw
@@ -371,6 +412,12 @@ public class PanelController {
                 yield home(g, m, f, result);
             }
             case "mkey" -> keysView(f, competitions.addKey(m, f, text));
+            case "mimg" -> {
+                Long forCaptain = a.length > 2 ? Long.valueOf(a[2]) : null; // set by a leader for a team
+                String result = drafts.setTeamImage(g, m, f, download(e), forCaptain);
+                workers.submit(() -> competitions.refreshScoreboard(f));
+                yield forCaptain != null ? teamImagesView(m, f, result) : captainHome(g, m, f, result);
+            }
             case "mapq" -> resultsView(f, text, "apsel", "Choose the player to pick", false, 1);
             case "mqq" -> resultsView(f, text, "qaddsel", "Choose a player to queue", false, 1);
             case "mpkq" -> resultsView(f, text, "pksel", "Choose your pick", false, 1);
@@ -440,12 +487,12 @@ public class PanelController {
 
         ui.divider().heading("📋 Setup — required, in order");
         ui.text(check(captainsDone, next == 0, "Captains", p.captains().isEmpty() ? "none yet"
-                : String.join(", ", p.captains().stream().map(c -> "<@" + c.id() + ">").toList())) + "\n"
+                        : String.join(", ", p.captains().stream().map(c -> "<@" + c.id() + ">").toList())) + "\n"
                 + check(namesDone, next == 1, "Team names", p.captains().isEmpty() ? "after captains"
-                : named + " of " + p.captains().size()) + "\n"
+                        : named + " of " + p.captains().size()) + "\n"
                 + check(timesDone, next == 2, "Competition times", timesDone
-                ? DraftManager.tct(comp.start()) + " → " + DraftManager.tct(comp.end()) + " TCT"
-                : timesPassed ? "start has passed, set new times" : "not set") + "\n"
+                        ? DraftManager.tct(comp.start()) + " → " + DraftManager.tct(comp.end()) + " TCT"
+                        : timesPassed ? "start has passed, set new times" : "not set") + "\n"
                 + check(keysDone, next == 3, "API keys", comp.keys() + " of " + CompetitionService.MIN_KEYS));
         ui.buttons(
                 step(captainsDone, next == 0, id("setcap", f), "👑", "Captains"),
@@ -471,6 +518,7 @@ public class PanelController {
             ui.divider().heading("👑 Captains");
             ui.text(captainLines(p, false));
             ui.buttons(Button.secondary(id("repl", f), "🔁 Replace Captain"),
+                    named > 0 ? Button.secondary(id("imgs", f), "🖼️ Team Images") : null,
                     isCaptain ? Button.secondary(id("my", f), "🎯 My Team") : null);
         }
 
@@ -504,6 +552,7 @@ public class PanelController {
         if (locked) ui.text("-# 🔒 Rosters are locked while the competition is live.");
         ui.buttons(locked ? null : Button.secondary(id("repl", f), "🔁 Replace Captain"),
                 Button.secondary(id("name", f), "🏷️ Team Names"),
+                Button.secondary(id("imgs", f), "🖼️ Team Images"),
                 isCaptain ? Button.secondary(id("my", f), "🎯 My Team") : null);
 
         ui.divider().heading("🏁 Competition");
@@ -551,6 +600,7 @@ public class PanelController {
         ui.text(captainLines(p, true));
         ui.buttons(locked ? null : Button.secondary(id("repl", f), "🔁 Replace Captain"),
                 Button.secondary(id("name", f), "🏷️ Team Names"),
+                Button.secondary(id("imgs", f), "🖼️ Team Images"),
                 isCaptain ? Button.secondary(id("my", f), "🎯 My Team") : null);
 
         ui.divider().heading("🏁 Competition");
@@ -581,7 +631,10 @@ public class PanelController {
 
     View captainHome(Guild g, Member m, Faction f, String notice) {
         CaptainView c = drafts.captainView(f, m.getIdLong());
-        Ui ui = new Ui(ORANGE).text("## 🎯 " + f.getName() + " · " + (c.team() == null ? "Your Team" : c.team()));
+        DraftManager.TeamImageInfo image = drafts.teamImage(f, m.getIdLong());
+        boolean hasImage = image != null && image.hasImage();
+        Ui ui = new Ui(ORANGE).section("## 🎯 " + f.getName() + " · " + (c.team() == null ? "Your Team" : c.team()),
+                hasImage ? drafts.teamImageFile(image) : null);
         ui.notice(notice);
 
         ui.heading("📍 Status");
@@ -610,9 +663,11 @@ public class PanelController {
         boolean poolReady = !drafts.poolList(f).isEmpty();
         ui.divider();
         ui.buttons(style(c.team() == null, id("name", f), c.team() == null ? "🏷️ Name Team" : "🏷️ Rename Team"),
-                poolReady ? Button.secondary(id("pool", f, "0"), "📋 Participants") : null,
+                image == null ? null : Button.secondary(id("img", f), hasImage ? "🖼️ Change Image" : "🖼️ Team Image"),
+                hasImage ? Button.secondary(id("imgrm", f), "🗑️ Remove Image") : null);
+        ui.buttons(poolReady ? Button.secondary(id("pool", f, "0"), "📋 Participants") : null,
                 drafts.isLeader(m, f) ? Button.secondary(id("home", f), "🎛️ Control Panel")
-                        : Button.secondary(id("my", f), "🔄 Refresh"),
+                                      : Button.secondary(id("my", f), "🔄 Refresh"),
                 Button.secondary(id("close", f), "✖ Close"));
         return ui.build();
     }
@@ -628,37 +683,134 @@ public class PanelController {
     private View teamBreakdownView(Faction f) {
         List<CompetitionService.TeamScore> teams = competitions.teamScores(f);
         CompetitionService.Status st = competitions.status(f);
-        Ui ui = new Ui(ORANGE).text("## 📊 " + f.getName() + " · Team breakdown\n-# Successful hits per player"
-                + (st.lastCheckedMs() == null ? "" : " · updated <t:" + st.lastCheckedMs() / 1000 + ":R>"));
+        String header = "## 📊 " + f.getName() + " · Team breakdown\n-# Successful hits per player"
+                + (st.lastCheckedMs() == null ? "" : " · updated <t:" + st.lastCheckedMs() / 1000 + ":R>");
         if (teams.isEmpty()) {
-            return ui.text("No teams yet — they appear once the draft has run.").build();
+            return new Ui(ORANGE).text(header).text("No teams yet — they appear once the draft has run.").build();
         }
+        List<FileUpload> pictures = new ArrayList<>();
+        for (CompetitionService.TeamScore t : teams) pictures.add(drafts.teamImageFile(t.imageId(), t.imageExt()));
+        // Team images make each team take more of Discord's 40 components, so drop the dividers
+        // between teams, then the Close button, until it fits.
+        Ui ui = null;
+        for (int mode = 0; mode < 3; mode++) {
+            ui = breakdown(f, header, teams, pictures, mode < 1, mode < 2);
+            if (ui.size() <= 40) break;
+        }
+        return ui.build();
+    }
+
+    private Ui breakdown(Faction f, String header, List<CompetitionService.TeamScore> teams, List<FileUpload> pictures,
+                         boolean dividers, boolean close) {
+        Ui ui = new Ui(ORANGE).text(header);
         // Share the space out so a big faction still fits in one message.
         int perTeam = Math.max(200, BREAKDOWN_CHARS / teams.size());
         boolean anyLeft = false;
         for (int i = 0; i < teams.size(); i++) {
             CompetitionService.TeamScore t = teams.get(i);
             String rank = i < MEDALS.length ? MEDALS[i] : (i + 1) + ".";
-            int width = Math.min(18, t.hitters().stream().mapToInt(h -> h.name().length() + (h.left() ? 1 : 0)).max().orElse(4));
-            int digits = String.valueOf(Math.max(t.total(), 0)).length();
-            StringBuilder table = new StringBuilder("```\n");
-            int shown = 0;
-            for (CompetitionService.Hitter h : t.hitters()) {
-                String row = fit(h.name() + (h.left() ? "*" : ""), width) + "  " + String.format("%" + digits + "d", h.hits()) + "\n";
-                if (table.length() + row.length() > perTeam - 24) break;
-                table.append(row);
-                shown++;
-                anyLeft |= h.left();
+            String heading = "### " + rank + " " + t.name() + " — " + t.total() + (t.total() == 1 ? " hit" : " hits");
+            if (dividers || i == 0) ui.divider();
+            FileUpload picture = pictures.get(i);
+            if (picture != null) {
+                // Beside the image: the heading and a summary line; the table goes underneath at full width.
+                CompetitionService.Hitter best = t.hitters().isEmpty() ? null : t.hitters().get(0);
+                ui.section(heading + "\n-# " + t.hitters().size() + (t.hitters().size() == 1 ? " player" : " players")
+                        + (best != null && best.hits() > 0 ? " · top hitter " + best.name() + " (" + best.hits() + ")" : ""), picture);
+                ui.text(memberTable(t.hitters(), perTeam - 24));
+            } else {
+                ui.text(heading + "\n" + memberTable(t.hitters(), perTeam - 24));
             }
-            int rest = t.hitters().size() - shown;
-            if (rest > 0) table.append("+").append(rest).append(" more\n");
-            table.append("```");
-            ui.divider().text("### " + rank + " " + t.name() + " — " + t.total() + (t.total() == 1 ? " hit" : " hits")
-                    + "\n" + table);
+            anyLeft |= t.hitters().stream().anyMatch(CompetitionService.Hitter::left);
         }
         if (anyLeft) ui.text("-# * left the faction — hits after leaving can't be seen");
-        ui.divider().buttons(Button.secondary(id("close", f), "✖ Close"));
-        return ui.build();
+        if (close) ui.divider().buttons(Button.secondary(id("close", f), "✖ Close"));
+        return ui;
+    }
+
+    /** Leaders: every team's image, with a menu to remove any that shouldn't be there. */
+    private View teamImagesView(Member m, Faction f, String notice) {
+        if (!drafts.isLeader(m, f)) throw new UserError("Only " + f.getName() + " leadership can manage team images.");
+        List<DraftManager.TeamImageInfo> list = drafts.teamImages(f);
+        Ui ui = new Ui(BLURPLE).text("## 🖼️ " + f.getName() + " · Team Images");
+        ui.notice(notice);
+        ui.text("Captains add their team's image from their own panel (🎯 My Team → 🖼️ Team Image), or you can set "
+                + "one for any team below. It shows on the "
+                + "draft board, the 📊 Team breakdown, the scoreboard while that team leads, and as the team's role icon.\n"
+                + "-# PNG, JPG or GIF · up to " + TeamImageService.mb(TeamImageService.MAX_UPLOAD_BYTES)
+                + " · animated GIFs up to " + TeamImageService.mb(TeamImageService.MAX_ANIMATED_BYTES));
+        ui.divider();
+        if (list.isEmpty()) ui.text("-# No named teams yet.");
+        for (DraftManager.TeamImageInfo t : list) {
+            String line = "**" + t.team() + "** — <@" + t.captainId() + ">";
+            if (t.hasImage()) ui.section(line + "\n-# ✅ Has an image", drafts.teamImageFile(t));
+            else ui.text(line + "\n-# No image yet");
+        }
+        if (!list.isEmpty()) {
+            StringSelectMenu.Builder set = StringSelectMenu.create(id("imgsetsel", f)).setPlaceholder("Set or change a team's image…");
+            for (DraftManager.TeamImageInfo t : list) {
+                set.addOptions(SelectOption.of(trim(t.team()), String.valueOf(t.captainId()))
+                        .withDescription(t.hasImage() ? "Has an image — replace it" : "No image yet"));
+            }
+            ui.divider().menu(set.build());
+        }
+        List<DraftManager.TeamImageInfo> withImage = list.stream().filter(DraftManager.TeamImageInfo::hasImage).toList();
+        if (!withImage.isEmpty()) {
+            StringSelectMenu.Builder menu = StringSelectMenu.create(id("imgrmsel", f)).setPlaceholder("Remove a team's image…");
+            for (DraftManager.TeamImageInfo t : withImage) {
+                menu.addOptions(SelectOption.of(trim(t.team()), String.valueOf(t.captainId())));
+            }
+            ui.menu(menu.build());
+        }
+        return ui.buttons(Button.secondary(id("home", f), "Back")).build();
+    }
+
+    /** Up to 5 members: one column. More: two columns, read top to bottom then left to right. */
+    private static final int ONE_COLUMN_MAX = 5;
+    private static final int COLUMN_GAP = 2;
+
+    /**
+     * A team's members as a code-block table that fits in {@code budget} characters.
+     * Two columns are narrower per name so the block still fits on a phone without wrapping.
+     */
+    static String memberTable(List<CompetitionService.Hitter> hitters, int budget) {
+        boolean twoCols = hitters.size() > ONE_COLUMN_MAX;
+        int maxName = twoCols ? 14 : 18;
+        int width = Math.min(maxName, hitters.stream().mapToInt(h -> h.name().length() + (h.left() ? 1 : 0)).max().orElse(4));
+        int digits = String.valueOf(hitters.stream().mapToInt(CompetitionService.Hitter::hits).max().orElse(0)).length();
+        int cellWidth = width + 1 + digits;
+
+        // Show as many as fit, in order; the rest become "+N more".
+        int shown = hitters.size();
+        while (shown > 0) {
+            int rows = twoCols ? (shown + 1) / 2 : shown;
+            int lineLen = twoCols ? cellWidth * 2 + COLUMN_GAP + 1 : cellWidth + 1;
+            int extra = shown < hitters.size() ? 16 : 0;
+            if (8 + rows * lineLen + extra <= budget) break;
+            shown--;
+        }
+        List<CompetitionService.Hitter> list = hitters.subList(0, shown);
+        int rows = twoCols ? (shown + 1) / 2 : shown;
+
+        StringBuilder out = new StringBuilder("```\n");
+        for (int r = 0; r < rows; r++) {
+            String left = cell(list.get(r), width, digits);
+            if (twoCols && r + rows < shown) {
+                out.append(left).append(" ".repeat(COLUMN_GAP)).append(cell(list.get(r + rows), width, digits));
+            } else {
+                out.append(left.stripTrailing());
+            }
+            out.append('\n');
+        }
+        int rest = hitters.size() - shown;
+        if (rest > 0) out.append("+").append(rest).append(" more\n");
+        return out.append("```").toString();
+    }
+
+    private static String cell(CompetitionService.Hitter h, int width, int digits) {
+        // Trim the name, not the "*", so a long name that left the faction is still marked.
+        String name = h.left() ? fit(h.name(), width - 1).stripTrailing() + "*" : h.name();
+        return fit(name, width) + " " + String.format("%" + digits + "d", h.hits());
     }
 
     /** Pads (or trims with …) to exactly {@code width} characters, for the tables. */
@@ -876,7 +1028,7 @@ public class PanelController {
         if (c.paused()) {
             String left = c.pausedRemainingMs() == null ? "" : " · " + Math.max(1, c.pausedRemainingMs() / 1000) + "s left on the clock";
             return c.onClock() ? "⏸️ **Draft paused** — you're on the clock when it resumes" + left
-                    : "⏸️ **Draft paused** — <@" + c.clockCaptain() + "> is up next" + left;
+                               : "⏸️ **Draft paused** — <@" + c.clockCaptain() + "> is up next" + left;
         }
         if (c.onClock()) return "🎯 **You're on the clock!** This is pick #" + c.nextPick() + timer;
         if (c.picksAway() == null) return "✅ You've no picks left — there aren't enough players for another round.";
@@ -966,6 +1118,37 @@ public class PanelController {
     private Modal teamNameModal(Faction f, long captainId, String current) {
         return textModal("mname:" + f.getKey() + ":" + captainId, current == null ? "Name Team" : "Rename Team",
                 "Team name", "2–40 characters", current, 2, 40);
+    }
+
+    /** {@code forCaptain}: the team a leader is setting the image for; null for a captain's own team. */
+    private static Modal imageModal(Faction f, Long forCaptain) {
+        AttachmentUpload upload = AttachmentUpload.create("file").setRequiredRange(1, 1).build();
+        return Modal.create(PREFIX + "mimg:" + f.getKey() + (forCaptain == null ? "" : ":" + forCaptain), "Team image")
+                .addComponents(Label.of("Your team's image", "PNG, JPG or GIF · up to "
+                        + TeamImageService.mb(TeamImageService.MAX_UPLOAD_BYTES) + " · animated GIFs up to "
+                        + TeamImageService.mb(TeamImageService.MAX_ANIMATED_BYTES), upload))
+                .build();
+    }
+
+    /** The image uploaded in the Team image form. */
+    private static byte[] download(ModalInteractionEvent e) {
+        var value = e.getValue("file");
+        List<Message.Attachment> files = value == null ? List.of() : value.getAsAttachmentList();
+        if (files.isEmpty()) throw new UserError("Choose an image to upload.");
+        Message.Attachment file = files.get(0);
+        if (file.getSize() > TeamImageService.MAX_UPLOAD_BYTES) {
+            throw new UserError("That image is " + TeamImageService.mb(file.getSize()) + " — the limit is "
+                    + TeamImageService.mb(TeamImageService.MAX_UPLOAD_BYTES) + ".");
+        }
+        try (InputStream in = file.getProxy().download().get(30, TimeUnit.SECONDS)) {
+            return in.readNBytes(TeamImageService.MAX_UPLOAD_BYTES + 1);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new UserError("I couldn't download that image — try again.");
+        } catch (Exception ex) {
+            log.warn("Team image download failed: {}", ex.toString());
+            throw new UserError("I couldn't download that image — try again.");
+        }
     }
 
     private static Modal searchModal(String id, String title) {

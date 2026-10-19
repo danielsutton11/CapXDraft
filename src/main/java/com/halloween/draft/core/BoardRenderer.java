@@ -32,7 +32,8 @@ public class BoardRenderer {
         return COLORS[Math.floorMod(i, COLORS.length)];
     }
 
-    public List<MessageEmbed> render(BotProperties.Faction faction, FactionState state) {
+    /** {@code attached}: the team image files attached to the board message, which team embeds can show. */
+    public List<MessageEmbed> render(BotProperties.Faction faction, FactionState state, java.util.Set<String> attached) {
         Draft d = state.draft;
         List<MessageEmbed> embeds = new ArrayList<>();
         embeds.add(header(faction, state));
@@ -40,7 +41,7 @@ public class BoardRenderer {
         for (int mode = 0; mode < 3; mode++) {
             List<MessageEmbed> teams = new ArrayList<>();
             for (int i = 0; i < d.captainOrder.size(); i++) {
-                teams.add(teamEmbed(state, d.captainOrder.get(i), i, mode));
+                teams.add(teamEmbed(state, d.captainOrder.get(i), i, mode, attached));
             }
             int total = embeds.get(0).getLength() + teams.stream().mapToInt(MessageEmbed::getLength).sum();
             if (total <= MAX_TOTAL || mode == 2) {
@@ -118,7 +119,7 @@ public class BoardRenderer {
     }
 
     /** mode 0 = full, 1 = compact, 2 = compact and truncated. */
-    private MessageEmbed teamEmbed(FactionState state, long captainId, int index, int mode) {
+    private MessageEmbed teamEmbed(FactionState state, long captainId, int index, int mode, java.util.Set<String> attached) {
         Draft d = state.draft;
         Team team = state.teams.get(captainId);
         StringBuilder sb = new StringBuilder("Captain: <@").append(captainId).append(">");
@@ -143,10 +144,12 @@ public class BoardRenderer {
         }
         if (picks.isEmpty()) sb.append("*No picks yet*");
 
-        return new EmbedBuilder()
+        EmbedBuilder eb = new EmbedBuilder()
                 .setTitle(state.teamName(captainId, d.captainName(captainId)))
                 .setDescription(sb.toString())
-                .setColor(color(index))
-                .build();
+                .setColor(color(index));
+        String file = TeamImageService.fileName(team);
+        if (file != null && attached != null && attached.contains(file)) eb.setThumbnail("attachment://" + file);
+        return eb.build();
     }
 }
