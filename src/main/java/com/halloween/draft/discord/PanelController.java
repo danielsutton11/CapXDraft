@@ -170,6 +170,21 @@ public class PanelController {
         Guild g = e.getGuild();
         long ch = channelId(e.getChannel());
 
+        // "📊 Team breakdown" under a scoreboard: a private list of every team's hitters. Anyone can open it.
+        if (action.equals("sbteams")) {
+            e.deferReply(true).queue(ok -> workers.submit(() -> {
+                InteractionHook hook = e.getHook();
+                try {
+                    show(hook, teamBreakdownView(f));
+                } catch (Exception ex) {
+                    log.warn("Team breakdown failed: {}", ex.getMessage());
+                    show(hook, new Ui(RED).text("⚠️ Couldn't load the team breakdown — try again in a minute.").build());
+                }
+                hook.deleteOriginal().queueAfter(PANEL_MINUTES, TimeUnit.MINUTES, null, err -> {});
+            }), PanelController::expired);
+            return;
+        }
+
         // The "Open my draft panel" button on the board/launcher: a fresh private panel, like /draft.
         if (action.equals("open")) {
             e.deferReply(true).queue(ok -> workers.submit(() -> open(e.getHook(), g, m, f.getKey(), ch)),
@@ -605,6 +620,52 @@ public class PanelController {
     // =====================================================================
     // Sub-screens
     // =====================================================================
+
+    private static final String[] MEDALS = {"🥇", "🥈", "🥉"};
+    private static final int BREAKDOWN_CHARS = 3600; // Discord allows 4000 characters of text per message
+
+    /** Every team's hitters for one faction's competition, as aligned tables. Read-only, for anyone. */
+    private View teamBreakdownView(Faction f) {
+        List<CompetitionService.TeamScore> teams = competitions.teamScores(f);
+        CompetitionService.Status st = competitions.status(f);
+        Ui ui = new Ui(ORANGE).text("## 📊 " + f.getName() + " · Team breakdown\n-# Successful hits per player"
+                + (st.lastCheckedMs() == null ? "" : " · updated <t:" + st.lastCheckedMs() / 1000 + ":R>"));
+        if (teams.isEmpty()) {
+            return ui.text("No teams yet — they appear once the draft has run.").build();
+        }
+        // Share the space out so a big faction still fits in one message.
+        int perTeam = Math.max(200, BREAKDOWN_CHARS / teams.size());
+        boolean anyLeft = false;
+        for (int i = 0; i < teams.size(); i++) {
+            CompetitionService.TeamScore t = teams.get(i);
+            String rank = i < MEDALS.length ? MEDALS[i] : (i + 1) + ".";
+            int width = Math.min(18, t.hitters().stream().mapToInt(h -> h.name().length() + (h.left() ? 1 : 0)).max().orElse(4));
+            int digits = String.valueOf(Math.max(t.total(), 0)).length();
+            StringBuilder table = new StringBuilder("```\n");
+            int shown = 0;
+            for (CompetitionService.Hitter h : t.hitters()) {
+                String row = fit(h.name() + (h.left() ? "*" : ""), width) + "  " + String.format("%" + digits + "d", h.hits()) + "\n";
+                if (table.length() + row.length() > perTeam - 24) break;
+                table.append(row);
+                shown++;
+                anyLeft |= h.left();
+            }
+            int rest = t.hitters().size() - shown;
+            if (rest > 0) table.append("+").append(rest).append(" more\n");
+            table.append("```");
+            ui.divider().text("### " + rank + " " + t.name() + " — " + t.total() + (t.total() == 1 ? " hit" : " hits")
+                    + "\n" + table);
+        }
+        if (anyLeft) ui.text("-# * left the faction — hits after leaving can't be seen");
+        ui.divider().buttons(Button.secondary(id("close", f), "✖ Close"));
+        return ui.build();
+    }
+
+    /** Pads (or trims with …) to exactly {@code width} characters, for the tables. */
+    private static String fit(String s, int width) {
+        if (s.length() > width) return s.substring(0, Math.max(1, width - 1)) + "…";
+        return s + " ".repeat(width - s.length());
+    }
 
     private View setCaptainsView(Faction f) {
         return new Ui(BLURPLE)

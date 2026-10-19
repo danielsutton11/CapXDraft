@@ -12,6 +12,8 @@ import com.halloween.draft.core.UserError;
 import com.halloween.draft.model.Competition;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.components.actionrow.ActionRow;
+import net.dv8tion.jda.api.components.buttons.Button;
 import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageEmbed;
@@ -60,7 +62,6 @@ public class CompetitionService {
     private static final long MEMBER_CHECK_SECONDS = 15 * 60;
     private static final long OVERLAP_SECONDS = 600; // re-read 10 minutes to catch long fights
     private static final long DRAFT_WARN_SECONDS = 30 * 60;
-    private static final int TOP_HITTERS = 10;
     private static final String[] MEDALS = {"🥇", "🥈", "🥉"};
 
     /** For the panel: everything about a faction's competition at a glance. */
@@ -388,7 +389,7 @@ public class CompetitionService {
             List<MessageEmbed> embeds = render(f, c);
             if (c.scoreboardMessageId != null) {
                 try {
-                    ch.editMessageEmbedsById(c.scoreboardMessageId, embeds).complete();
+                    ch.editMessageEmbedsById(c.scoreboardMessageId, embeds).setComponents(teamsButtonRow(f)).complete();
                     return;
                 } catch (ErrorResponseException e) {
                     if (e.getErrorResponse() != ErrorResponse.UNKNOWN_MESSAGE) {
@@ -398,7 +399,7 @@ public class CompetitionService {
                 }
             }
             try {
-                Message msg = ch.sendMessageEmbeds(embeds).complete();
+                Message msg = ch.sendMessageEmbeds(embeds).setComponents(teamsButtonRow(f)).complete();
                 drafts.updateCompetition(f, x -> x.scoreboardMessageId = msg.getIdLong());
             } catch (Exception e) {
                 log.warn("Scoreboard post failed: {}", e.getMessage());
@@ -406,11 +407,14 @@ public class CompetitionService {
         }
     }
 
-    private record Hitter(String name, int hits, boolean left) {}
-    private record TeamScore(String name, int total, List<Hitter> hitters) {}
+    /** One player's score; {@code name} is their display name without the [ID]. */
+    public record Hitter(String name, int hits, boolean left) {}
+    /** A team's total and every member's hits, highest first. */
+    public record TeamScore(String name, int total, List<Hitter> hitters) {}
 
-    private List<MessageEmbed> render(Faction f, Competition c) {
-        long now = Instant.now().getEpochSecond();
+    /** Every team's score for the faction's competition, best team first. Empty before the draft. */
+    public List<TeamScore> teamScores(Faction f) {
+        Competition c = drafts.competition(f);
         List<Long> family = familyFactionIds(props);
         Set<Long> left = leftFaction.getOrDefault(f.getKey(), Set.of());
         Map<Long, Integer> hits = c.startEpoch == null ? Map.of()
@@ -421,12 +425,26 @@ public class CompetitionService {
             List<Hitter> hitters = new ArrayList<>();
             for (RosterMember m : t.members()) {
                 int n = m.tornId() == null ? 0 : hits.getOrDefault(m.tornId(), 0);
-                hitters.add(new Hitter(m.display(), n, m.tornId() != null && left.contains(m.tornId())));
+                hitters.add(new Hitter(cleanName(m.display()), n, m.tornId() != null && left.contains(m.tornId())));
             }
-            hitters.sort(Comparator.comparingInt(Hitter::hits).reversed().thenComparing(Hitter::name));
+            hitters.sort(Comparator.comparingInt(Hitter::hits).reversed()
+                    .thenComparing(Hitter::name, String.CASE_INSENSITIVE_ORDER));
             teams.add(new TeamScore(t.teamName(), hitters.stream().mapToInt(Hitter::hits).sum(), hitters));
         }
         teams.sort(Comparator.comparingInt(TeamScore::total).reversed());
+        return teams;
+    }
+
+    /** Button under each scoreboard that opens a private per-team breakdown. */
+    public static final String TEAMS_BUTTON_PREFIX = "dp:sbteams:";
+
+    private static ActionRow teamsButtonRow(Faction f) {
+        return ActionRow.of(Button.secondary(TEAMS_BUTTON_PREFIX + f.getKey(), "📊 Team breakdown"));
+    }
+
+    private List<MessageEmbed> render(Faction f, Competition c) {
+        long now = Instant.now().getEpochSecond();
+        List<TeamScore> teams = teamScores(f);
         int total = teams.stream().mapToInt(TeamScore::total).sum();
 
         // Status heading and colour: green while live, orange before, grey while the last hits come in, gold when final.
@@ -475,7 +493,7 @@ public class CompetitionService {
             record Row(String name, int hits, String team, boolean left) {}
             List<Row> hitters = new ArrayList<>();
             for (TeamScore t : teams) {
-                for (Hitter h : t.hitters()) hitters.add(new Row(cleanName(h.name()), h.hits(), t.name(), h.left()));
+                for (Hitter h : t.hitters()) hitters.add(new Row(h.name(), h.hits(), t.name(), h.left()));
             }
             hitters.sort(Comparator.comparingInt(Row::hits).reversed().thenComparing(Row::name, String.CASE_INSENSITIVE_ORDER));
             List<Row> top = hitters.stream().filter(r -> r.hits() > 0).limit(TOP_OVERALL).toList();

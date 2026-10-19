@@ -123,12 +123,13 @@ stopped. This runs on its own thread, so slow Torn responses never hold up the d
 **What counts:** results Attacked, Mugged, Hospitalized, Arrested, Looted, Special and Bounty; by a
 drafted player or captain (matched on Torn ID); defender not in any of the five family factions —
 your own included — at the time of the attack; attack ended inside the window. Stealthed attacks
-count. The scoreboard ranks teams with each team's top 10 hitters, and is marked **🏁 Final results**
-two minutes after the end once the last hits are in.
+count. The scoreboard shows a 🏆 team standings table and the ⚔️ top 15 hitters across all teams, and
+is marked **🏁 Final results** two minutes after the end once the last hits are in. Its **📊 Team
+breakdown** button opens a private panel (for anyone) listing every team's players and their hits.
 
 **Keeping it honest:**
 - Every 15 minutes the bot checks the Torn faction's member list. Drafted players who've left are
-  marked "(left faction)" on the scoreboard and listed on the leader panel; their earlier hits still
+  marked with a * on the scoreboard and listed on the leader panel; their earlier hits still
   count, but later ones can't be seen.
 - Every attack says which faction the attacker was in. If a key starts returning another faction's
   attacks (its owner moved), it's marked as failing. Keys are also re-checked hourly and flagged if
