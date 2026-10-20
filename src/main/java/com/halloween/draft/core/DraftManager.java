@@ -78,6 +78,8 @@ public class DraftManager {
     private final Map<String, Snapshot> snapshots = new ConcurrentHashMap<>();
     /** Factions whose saved state couldn't be read: backed up, and locked so it's never overwritten. */
     private final Set<String> broken = ConcurrentHashMap.newKeySet();
+    /** Torn IDs whose streak lookup is queued or running, per faction, so the same player isn't looked up twice at once. */
+    private final Map<String, Set<Long>> streaksInFlight = new ConcurrentHashMap<>();
     private volatile JDA jda;
 
     public DraftManager(BotProperties props, StateRepository repo, BoardRenderer board,
@@ -339,8 +341,8 @@ public class DraftManager {
                 if (previous.contains(id) && teamNamed(s, id)) continue;
                 dm(id, "👑 You're a **" + f.getName() + "** draft captain!\n"
                         + (teamNamed(s, id) ? "Your team is **" + s.teams.get(id).name + "**. "
-                                            : "**Name your team:** go to <#" + f.getChannelId()
-                                              + ">, press 🎛️ **Open my draft panel**, then 🏷️ **Name Team**.\n")
+                        : "**Name your team:** go to <#" + f.getChannelId()
+                        + ">, press 🎛️ **Open my draft panel**, then 🏷️ **Name Team**.\n")
                         + "You'll get a DM here when it's your turn to pick.");
             }
 
@@ -589,7 +591,7 @@ public class DraftManager {
             dm(newId, "🔁 You're now a " + f.getName() + " captain"
                     + (named ? " of **" + team.name + "**" : "") + ", replacing " + oldCap.getEffectiveName() + "."
                     + (named ? "" : "\n**Name your team:** go to <#" + f.getChannelId()
-                                    + ">, press 🎛️ **Open my draft panel**, then 🏷️ **Name Team**."));
+                    + ">, press 🎛️ **Open my draft panel**, then 🏷️ **Name Team**."));
             dm(oldId, "🔁 You've been replaced as a " + f.getName() + " captain by " + newCap.getEffectiveName() + ".");
             if (running) {
                 if (s.draft.status == DraftStatus.COMPLETE) finish(f, s, g);
@@ -635,7 +637,7 @@ public class DraftManager {
                 String tornName = torn.fetchName(tornId);
                 Member linked = memberByTornId(g, tornId, tornName);
                 p = linked != null ? new Player(linked.getIdLong(), linked.getEffectiveName(), tornId)
-                                   : Player.tornOnly(tornId, tornName);
+                        : Player.tornOnly(tornId, tornName);
             }
             if (s.activeCaptains().contains(p.id)) throw new UserError(p.display + " is a captain.");
 
@@ -764,6 +766,15 @@ public class DraftManager {
         }
 
         PoolBuilder.Result r = PoolBuilder.build(roleHolders, everyone, members, capIds, capTorn, s::isExcluded);
+        // Keep streaks already looked up, so rebuilding the list doesn't fetch everyone again.
+        Map<Long, Integer> known = new HashMap<>();
+        if (s.pool != null) s.pool.stream().filter(p -> p.tornId != null && p.streak != null).forEach(p -> known.put(p.tornId, p.streak));
+        if (s.draft != null) {
+            s.draft.eligible.stream().filter(p -> p.tornId != null && p.streak != null).forEach(p -> known.put(p.tornId, p.streak));
+            s.draft.picks.stream().map(pk -> pk.player).filter(p -> p.tornId != null && p.streak != null)
+                    .forEach(p -> known.put(p.tornId, p.streak));
+        }
+        r.players().stream().filter(p -> p.streak == null && p.tornId != null).forEach(p -> p.streak = known.get(p.tornId));
         if (!r.leftOut().isEmpty()) {
             note += "\n⚠️ Left out " + r.leftOut().size() + " draft-role member" + (r.leftOut().size() == 1 ? "" : "s")
                     + " who aren't in the Torn faction (their hits can't be tracked): "
@@ -1694,8 +1705,10 @@ public class DraftManager {
      * a Torn hiccup, a redeploy mid-fetch) is retried a couple of minutes later, up to 3 passes.
      */
     private void fetchStreaks(Faction f, List<Player> players, int attempt) {
+        Set<Long> inFlight = streaksInFlight.computeIfAbsent(f.getKey(), k -> ConcurrentHashMap.newKeySet());
         Map<Long, Long> ids = new LinkedHashMap<>();
-        players.stream().filter(p -> p.tornId != null).forEach(p -> ids.put(p.id, p.tornId));
+        // Skip anyone already being looked up (e.g. Set Captains then Rebuild List straight after).
+        players.stream().filter(p -> p.tornId != null && inFlight.add(p.tornId)).forEach(p -> ids.put(p.id, p.tornId));
         if (ids.isEmpty()) return;
         log.info("{}: fetching Torn streaks for {} players (pass {})", f.getName(), ids.size(), attempt);
         torn.fetchStreaks(ids,
@@ -1709,6 +1722,7 @@ public class DraftManager {
                     return null;
                 }),
                 () -> {
+                    inFlight.removeAll(ids.values());
                     int missing = withLock(f.getKey(), () -> {
                         FactionState s = state(f);
                         Guild g = s.draft == null ? null : guildFor(s.draft);
@@ -1880,7 +1894,7 @@ public class DraftManager {
         try {
             return work.get();
         } catch (RuntimeException e) {
-            if (lock.getHoldCount() == 1) rollBack(key); // outermost call only; nested ones just rethrow
+            if (lock.getHoldCount() == 1) rollBack(key, e); // outermost call only; nested ones just rethrow
             throw e;
         } finally {
             lock.unlock();
@@ -1888,13 +1902,17 @@ public class DraftManager {
     }
 
     /** Replaces the in-memory state with the last saved one. Caller holds the lock. */
-    private void rollBack(String key) {
+    private void rollBack(String key, RuntimeException cause) {
         try {
             FactionState saved = repo.load(key).orElseGet(() -> new FactionState(key));
             saved.factionKey = key;
             states.put(key, saved);
             snapshot(saved);
-            log.info("{}: action failed, state rolled back to the last save", key);
+            if (cause instanceof UserError) {
+                log.info("{}: action refused ({}), state rolled back to the last save", key, cause.getMessage());
+            } else {
+                log.warn("{}: action failed, state rolled back to the last save", key, cause);
+            }
         } catch (StateRepository.UnreadableState e) {
             broken.add(key);
             snapshots.remove(key);

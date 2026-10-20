@@ -137,7 +137,14 @@ public class TornAttackClient {
             try {
                 HttpResponse<String> res = http.send(HttpRequest.newBuilder(URI.create(full))
                         .timeout(Duration.ofSeconds(20)).GET().build(), HttpResponse.BodyHandlers.ofString());
-                JsonNode root = mapper.readTree(res.body());
+                String body = res.body() == null ? "" : res.body().stripLeading();
+                if (body.startsWith("<")) { // Torn's down or in maintenance: a web page, not JSON
+                    log.warn("Torn API returned a web page instead of data (HTTP {}) — Torn is probably down or in maintenance",
+                            res.statusCode());
+                    sleep(3_000);
+                    continue;
+                }
+                JsonNode root = mapper.readTree(body);
                 if (root.has("error")) {
                     int code = root.path("error").path("code").asInt();
                     String msg = root.path("error").path("error").asText("error " + code);

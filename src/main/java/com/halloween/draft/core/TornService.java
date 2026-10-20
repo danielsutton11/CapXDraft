@@ -69,13 +69,20 @@ public class TornService {
                              Runnable onDone) {
         if (!enabled() || tornIdsByDiscordId.isEmpty()) return;
         worker.submit(() -> {
-            for (Map.Entry<Long, Long> e : tornIdsByDiscordId.entrySet()) {
-                Integer streak = fetchStreak(e.getValue());
-                if (streak != null) onResult.accept(e.getKey(), streak);
-                else log.info("No active streak returned for Torn ID {}", e.getValue());
-                sleep(SPACING_MS);
+            try {
+                for (Map.Entry<Long, Long> e : tornIdsByDiscordId.entrySet()) {
+                    try {
+                        Integer streak = fetchStreak(e.getValue());
+                        if (streak != null) onResult.accept(e.getKey(), streak);
+                        else log.info("No active streak returned for Torn ID {}", e.getValue());
+                    } catch (RuntimeException ex) {
+                        log.warn("Streak lookup for Torn ID {} failed: {}", e.getValue(), ex.getMessage());
+                    }
+                    sleep(SPACING_MS);
+                }
+            } finally {
+                onDone.run(); // always, so the caller knows this batch is finished
             }
-            onDone.run();
         });
     }
 
