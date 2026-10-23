@@ -547,6 +547,15 @@ public class PanelController {
                 + (p.status() == DraftStatus.ENDED ? "-# 🛑 The draft was ended early" : "-# ✅ The draft is complete"));
         ui.notice(notice);
 
+        // Someone missed off the list can still be added to a completed draft: that reopens it and
+        // the next captain in the snake order picks. Not after End Draft, and not while the competition is live.
+        if (p.status() == DraftStatus.COMPLETE) {
+            ui.divider().heading("👥 Participants");
+            ui.text(locked ? "-# 🔒 Late additions wait until the competition ends."
+                    : "Missed someone? ➕ Add reopens the draft and the next captain in the order picks them.");
+            ui.buttons(locked ? null : Button.secondary(id("add", f), "➕ Add"));
+        }
+
         ui.divider().heading("👑 Teams");
         ui.text(captainLines(p, true));
         if (locked) ui.text("-# 🔒 Rosters are locked while the competition is live.");

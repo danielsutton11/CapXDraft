@@ -640,6 +640,10 @@ public class DraftManager {
                         : Player.tornOnly(tornId, tornName);
             }
             if (s.activeCaptains().contains(p.id)) throw new UserError(p.display + " is a captain.");
+            if (s.draft != null && s.draft.status == DraftStatus.ENDED && s.pool == null) {
+                throw new UserError("The " + f.getName() + " draft was ended early, so it can't be reopened. "
+                        + "An admin needs to run 🧹 Clean Up before a new draft.");
+            }
 
             if (preDraft(s)) {
                 if (s.pool == null) s.pool = buildPool(g, f, s).players();
