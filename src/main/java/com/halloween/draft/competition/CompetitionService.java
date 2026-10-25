@@ -329,7 +329,7 @@ public class CompetitionService {
             throw new UserError(secret == null || secret.isBlank()
                     ? "KEY_ENCRYPTION_SECRET isn't set on the server, so keys can't be stored safely."
                     : "KEY_ENCRYPTION_SECRET is too short (" + secret.length()
-                      + " characters) — it needs at least 16, so keys can't be stored safely.");
+                    + " characters) — it needs at least 16, so keys can't be stored safely.");
         }
         if (f.getTornFactionId() <= 0) throw new UserError("No Torn faction ID is configured for " + f.getName() + ".");
         TornAttackClient.KeyOwner owner = torn.verify(rawKey.trim(), f.getTornFactionId(), f.getName());
@@ -524,28 +524,24 @@ public class CompetitionService {
             standings.append("```");
             main.addField("🏆 Team standings", standings.toString(), false);
 
-            record Row(String name, int hits, String team, boolean left) {}
-            List<Row> hitters = new ArrayList<>();
-            for (TeamScore t : teams) {
-                for (Hitter h : t.hitters()) hitters.add(new Row(h.name(), h.hits(), t.name(), h.left()));
-            }
-            hitters.sort(Comparator.comparingInt(Row::hits).reversed().thenComparing(Row::name, String.CASE_INSENSITIVE_ORDER));
-            List<Row> top = hitters.stream().filter(r -> r.hits() > 0).limit(TOP_OVERALL).toList();
+            // Name and hits only: with the team column too, rows were ~40 characters and wrapped on phones.
+            List<Hitter> hitters = new ArrayList<>();
+            for (TeamScore t : teams) hitters.addAll(t.hitters());
+            hitters.sort(Comparator.comparingInt(Hitter::hits).reversed().thenComparing(Hitter::name, String.CASE_INSENSITIVE_ORDER));
+            List<Hitter> top = hitters.stream().filter(r -> r.hits() > 0).limit(TOP_OVERALL).toList();
             if (top.isEmpty()) {
                 main.addField("⚔️ Top hitters", "*No hits yet.*", false);
             } else {
                 int nameWidth = Math.min(NAME_WIDTH, top.stream().mapToInt(r -> r.name().length() + (r.left() ? 1 : 0)).max().orElse(4));
                 int hitDigits = String.valueOf(top.get(0).hits()).length();
-                int teamCol = Math.min(TEAM_WIDTH, top.stream().mapToInt(r -> r.team().length()).max().orElse(4));
                 StringBuilder table = new StringBuilder("```\n");
-                for (Row r : top) {
+                for (Hitter r : top) {
                     table.append(pad(r.name() + (r.left() ? "*" : ""), nameWidth)).append("  ")
-                            .append(String.format("%" + hitDigits + "d", r.hits())).append("  ")
-                            .append(pad(r.team(), teamCol).stripTrailing()).append('\n');
+                            .append(String.format("%" + hitDigits + "d", r.hits())).append('\n');
                 }
                 table.append("```");
                 main.addField("⚔️ Top hitters", table.toString(), false);
-                anyLeft = top.stream().anyMatch(Row::left);
+                anyLeft = top.stream().anyMatch(Hitter::left);
             }
         }
 
