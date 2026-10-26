@@ -23,7 +23,6 @@ import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.exceptions.ErrorResponseException;
 import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.utils.FileUpload;
-import net.dv8tion.jda.api.utils.MarkdownSanitizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -510,19 +509,22 @@ public class CompetitionService {
             main.addField("Teams", "*No teams yet — they appear once the draft has run.*", false);
         } else {
             main.addField("Total hits", "**" + total + "**\n" + SPACER, true);
-            // Plain text rather than code blocks: a phone with a larger text size fits only ~22
-            // monospace characters, so aligned tables wrap badly. Plain lines wrap like normal text.
-            // Each team gets a short code, shown in the standings and used in Top hitters.
+            // Code blocks so names line up on the left and numbers on the right. With no thumbnail the
+            // fields get the embed's full width; rows are kept to ~31 characters, which a phone with a
+            // larger text size still fits.
             Map<String, String> codes = teamCodes(teams);
-            StringBuilder standings = new StringBuilder();
+            int rankWidth = String.valueOf(teams.size()).length() + 1;
+            int teamWidth = Math.min(TEAM_WIDTH, teams.stream().mapToInt(t -> t.name().length()).max().orElse(4));
+            int totalDigits = teams.stream().mapToInt(t -> String.valueOf(t.total()).length()).max().orElse(1);
+            // A zero-width first line gives a gap between the field heading and its table.
+            StringBuilder standings = new StringBuilder(SPACER + "\n```\n");
             for (int i = 0; i < teams.size(); i++) {
                 TeamScore t = teams.get(i);
-                String rank = i < MEDALS.length ? MEDALS[i] : "`" + (i + 1) + ".`";
-                standings.append(rank).append(' ').append(MarkdownSanitizer.escape(t.name()))
-                        .append(" `").append(codes.get(t.name())).append("` — **")
-                        .append(t.total()).append("**\n");
+                standings.append(pad((i + 1) + ".", rankWidth)).append(' ')
+                        .append(pad(t.name(), teamWidth)).append("  ")
+                        .append(String.format("%" + totalDigits + "d", t.total())).append('\n');
             }
-            main.addField("🏆 Team standings", standings + SPACER, false);
+            main.addField("🏆 Team standings", standings.append("```\n").append(SPACER).toString(), false);
 
             record Row(String name, int hits, String team, boolean left) {}
             List<Row> hitters = new ArrayList<>();
@@ -532,17 +534,19 @@ public class CompetitionService {
             hitters.sort(Comparator.comparingInt(Row::hits).reversed().thenComparing(Row::name, String.CASE_INSENSITIVE_ORDER));
             List<Row> top = hitters.stream().filter(r -> r.hits() > 0).limit(TOP_OVERALL).toList();
             if (top.isEmpty()) {
-                main.addField("⚔️ Top hitters", "*No hits yet.*", false);
+                main.addField("⚔️ Top hitters", SPACER + "\n*No hits yet.*", false);
             } else {
-                // "`1341` Chuck_Norris · SB": hits padded to one width so the names line up.
+                // "Chuck_Norris     SB  1341": name, team code, hits right-aligned.
+                int nameWidth = Math.min(NAME_WIDTH, top.stream().mapToInt(r -> r.name().length() + (r.left() ? 1 : 0)).max().orElse(4));
+                int codeWidth = top.stream().mapToInt(r -> codes.get(r.team()).length()).max().orElse(2);
                 int hitDigits = String.valueOf(top.get(0).hits()).length();
-                StringBuilder list = new StringBuilder();
+                StringBuilder table = new StringBuilder(SPACER + "\n```\n");
                 for (Row r : top) {
-                    list.append('`').append(String.format("%" + hitDigits + "d", r.hits())).append("` ")
-                            .append(MarkdownSanitizer.escape(r.name())).append(r.left() ? "\\*" : "")
-                            .append(" · **").append(codes.get(r.team())).append("**\n");
+                    table.append(pad(r.name() + (r.left() ? "*" : ""), nameWidth)).append("  ")
+                            .append(pad(codes.get(r.team()), codeWidth)).append("  ")
+                            .append(String.format("%" + hitDigits + "d", r.hits())).append('\n');
                 }
-                main.addField("⚔️ Top hitters", list.toString().stripTrailing(), false);
+                main.addField("⚔️ Top hitters", table.append("```").toString(), false);
                 anyLeft = top.stream().anyMatch(Row::left);
             }
         }
@@ -552,19 +556,20 @@ public class CompetitionService {
         main.setFooter("Successful outgoing hits by drafted players · family factions excluded"
                 + (anyLeft ? " · * left the faction" : "") + " · " + updated);
 
-        // No thumbnail: on mobile it reserves a column down the whole right side of the embed and
-        // squeezes every field into the left part. While live, the leader's image is the small author
-        // icon above the title instead; on the final results it's the large image at the bottom.
-        if (imageFile != null) {
-            if (c.finalPosted) main.setImage("attachment://" + imageFile);
-            else if (!teams.isEmpty()) main.setAuthor("Leading: " + teams.get(0).name(), null, "attachment://" + imageFile);
-        }
+        // The leader's (or winner's) image goes large at the bottom. Never a thumbnail: on mobile that
+        // reserves a column down the whole right side of the embed and squeezes every field.
+        if (imageFile != null) main.setImage("attachment://" + imageFile);
 
         List<MessageEmbed> embeds = new ArrayList<>();
         embeds.add(main.build());
 
         return embeds;
     }
+
+    /** Team name column in the standings: "1. " + 22 + 2 spaces + 4 digits = 31 characters. */
+    private static final int TEAM_WIDTH = 22;
+    /** Top hitters name column: 15 + 2 + code (≤4) + 2 + 4 digits ≤ 27 characters. */
+    private static final int NAME_WIDTH = 15;
 
     /** A zero-width line: Discord trims blank lines, so this is what adds a gap after a field. */
     private static final String SPACER = "\u200B";
