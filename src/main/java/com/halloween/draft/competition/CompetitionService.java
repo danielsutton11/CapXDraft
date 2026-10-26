@@ -28,6 +28,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import javax.imageio.ImageIO;
+import java.awt.AlphaComposite;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -400,7 +408,7 @@ public class CompetitionService {
             boolean upload = !wanted.equals(c.scoreboardImageSig == null ? "" : c.scoreboardImageSig);
             if (c.scoreboardMessageId != null) {
                 try {
-                    FileUpload file = upload && featured != null ? images.upload(featured.imageId(), featured.imageExt()) : null;
+                    FileUpload file = upload && featured != null ? banner(images.upload(featured.imageId(), featured.imageExt())) : null;
                     String shown = upload ? (file == null ? null : file.getName()) : (wanted.isEmpty() ? null : wanted);
                     var edit = ch.editMessageEmbedsById(c.scoreboardMessageId, render(f, c, teams, shown))
                             .setComponents(teamsButtonRow(f));
@@ -416,7 +424,7 @@ public class CompetitionService {
                 }
             }
             try {
-                FileUpload file = featured == null ? null : images.upload(featured.imageId(), featured.imageExt());
+                FileUpload file = featured == null ? null : banner(images.upload(featured.imageId(), featured.imageExt()));
                 String shown = file == null ? null : file.getName();
                 Message msg = ch.sendMessageEmbeds(render(f, c, teams, shown)).setComponents(teamsButtonRow(f))
                         .setFiles(file == null ? List.<FileUpload>of() : List.of(file)).complete();
@@ -528,10 +536,13 @@ public class CompetitionService {
             int rankWidth = String.valueOf(teams.size()).length() + 1;
             int teamWidth = Math.min(TEAM_WIDTH, teams.stream().mapToInt(t -> t.name().length()).max().orElse(4));
             int totalDigits = teams.stream().mapToInt(t -> String.valueOf(t.total()).length()).max().orElse(1);
-            int nameWidth = Math.min(NAME_WIDTH, top.stream().mapToInt(r -> r.name().length() + (r.left() ? 1 : 0)).max().orElse(4));
-            int codeWidth = top.stream().mapToInt(r -> codes.get(r.team()).length()).max().orElse(2);
-            int hitDigits = top.isEmpty() ? 1 : String.valueOf(top.get(0).hits()).length();
+            // At least as wide as the column headers: Player, Team, Hits.
+            int nameWidth = Math.max(6, Math.min(NAME_WIDTH, top.stream().mapToInt(r -> r.name().length() + (r.left() ? 1 : 0)).max().orElse(4)));
+            int codeWidth = Math.max(4, top.stream().mapToInt(r -> codes.get(r.team()).length()).max().orElse(2));
+            int hitDigits = Math.max(4, top.isEmpty() ? 1 : String.valueOf(top.get(0).hits()).length());
 
+            teamWidth = Math.max(4, teamWidth);
+            totalDigits = Math.max(5, totalDigits); // fits the "Total" heading
             int standingsRow = rankWidth + 1 + teamWidth + 2 + totalDigits;
             int hittersRow = nameWidth + 2 + codeWidth + 2 + hitDigits;
             int rowWidth = Math.max(standingsRow, top.isEmpty() ? 0 : hittersRow);
@@ -540,6 +551,9 @@ public class CompetitionService {
 
             // A zero-width first line gives a gap between the field heading and its table.
             StringBuilder standings = new StringBuilder(SPACER + "\n```\n");
+            standings.append(" ".repeat(rankWidth + 1)).append(pad("Team", teamWidth)).append(standingsGap)
+                    .append(String.format("%" + totalDigits + "s", "Total")).append('\n')
+                    .append("─".repeat(rowWidth)).append('\n');
             for (int i = 0; i < teams.size(); i++) {
                 TeamScore t = teams.get(i);
                 standings.append(pad((i + 1) + ".", rankWidth)).append(' ')
@@ -553,6 +567,9 @@ public class CompetitionService {
             } else {
                 // "Chuck_Norris  SB      1341": name, team code, hits right-aligned.
                 StringBuilder table = new StringBuilder(SPACER + "\n```\n");
+                table.append(pad("Player", nameWidth)).append("  ").append(pad("Team", codeWidth)).append(hittersGap)
+                        .append(String.format("%" + hitDigits + "s", "Hits")).append('\n')
+                        .append("─".repeat(rowWidth)).append('\n');
                 for (Row r : top) {
                     table.append(pad(r.name() + (r.left() ? "*" : ""), nameWidth)).append("  ")
                             .append(pad(codes.get(r.team()), codeWidth)).append(hittersGap)
@@ -562,21 +579,22 @@ public class CompetitionService {
                 anyLeft = top.stream().anyMatch(Row::left);
             }
 
-            // Says whose image is shown underneath: Discord always puts the embed image last.
+            // Says whose image is underneath: Discord always puts the embed image after the fields.
             if (imageFile != null) {
                 main.addField(SPACER, (c.finalPosted ? "🏆 **Winners: " : "👑 **Leading: ")
                         + MarkdownSanitizer.escape(teams.get(0).name()) + "**", false);
             }
         }
 
+        // The leader's (or winner's) image, large at the bottom. It's sent as a wide banner (see
+        // banner()), because on desktop Discord narrows an embed to its image's width. Never a
+        // thumbnail: on mobile that reserves a column down the right and squeezes every field.
+        if (imageFile != null) main.setImage("attachment://" + imageFile);
+
         String updated = c.lastCheckedMs == null ? "Not checked yet"
                 : "Updated " + DraftManager.tct(c.lastCheckedMs / 1000).substring(11) + " TCT";
         main.setFooter("Successful outgoing hits by drafted players · family factions excluded"
                 + (anyLeft ? " · * left the faction" : "") + " · " + updated);
-
-        // The leader's (or winner's) image goes large at the bottom. Never a thumbnail: on mobile that
-        // reserves a column down the whole right side of the embed and squeezes every field.
-        if (imageFile != null) main.setImage("attachment://" + imageFile);
 
         List<MessageEmbed> embeds = new ArrayList<>();
         embeds.add(main.build());
@@ -650,6 +668,73 @@ public class CompetitionService {
     static String pad(String s, int width) {
         if (s.length() > width) return s.substring(0, width - 1) + "…";
         return s + " ".repeat(width - s.length());
+    }
+
+    private static final int BANNER_W = 1200, BANNER_H = 400;
+
+    /**
+     * Turns the team image into a 3:1 banner: the image centred at full height, the sides filled with
+     * a blurred, darkened copy of itself. Discord sizes an embed to its image on desktop, so a wide
+     * image keeps the scoreboard full width. Keeps the file name, so the "has the image changed?"
+     * check still matches. Anything it can't read (an animated GIF, WebP) is sent unchanged.
+     */
+    static FileUpload banner(FileUpload original) {
+        if (original == null) return null;
+        String name = original.getName();
+        String ext = name.substring(name.lastIndexOf('.') + 1).toLowerCase();
+        if (!ext.equals("png") && !ext.equals("jpg") && !ext.equals("jpeg")) return original;
+        byte[] bytes;
+        try (InputStream in = original.getData()) {
+            bytes = in.readAllBytes();
+        } catch (Exception e) {
+            log.warn("Couldn't read {}: {}", name, e.getMessage());
+            return null;
+        }
+        try {
+            BufferedImage src = ImageIO.read(new java.io.ByteArrayInputStream(bytes));
+            if (src == null) return FileUpload.fromData(bytes, name);
+            if ((double) src.getWidth() / src.getHeight() >= 2.5) return FileUpload.fromData(bytes, name); // already wide
+
+            BufferedImage out = new BufferedImage(BANNER_W, BANNER_H, BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = out.createGraphics();
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+
+            // Background: the image scaled to cover the banner, shrunk to a few pixels and stretched back
+            // up (a cheap, smooth blur), then darkened so the centre stands out.
+            double cover = Math.max((double) BANNER_W / src.getWidth(), (double) BANNER_H / src.getHeight());
+            int cw = (int) Math.ceil(src.getWidth() * cover), ch = (int) Math.ceil(src.getHeight() * cover);
+            BufferedImage tiny = new BufferedImage(BANNER_W / 40, BANNER_H / 40, BufferedImage.TYPE_INT_RGB);
+            Graphics2D tg = tiny.createGraphics();
+            tg.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            tg.drawImage(src, (tiny.getWidth() - cw / 40) / 2, (tiny.getHeight() - ch / 40) / 2, cw / 40, ch / 40, null);
+            tg.dispose();
+            // Scale up in two steps: one big bilinear jump leaves visible blocks.
+            BufferedImage mid = new BufferedImage(BANNER_W / 8, BANNER_H / 8, BufferedImage.TYPE_INT_RGB);
+            Graphics2D mg = mid.createGraphics();
+            mg.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            mg.drawImage(tiny, 0, 0, mid.getWidth(), mid.getHeight(), null);
+            mg.dispose();
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            g.drawImage(mid, 0, 0, BANNER_W, BANNER_H, null);
+            g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.55f));
+            g.setColor(Color.BLACK);
+            g.fillRect(0, 0, BANNER_W, BANNER_H);
+            g.setComposite(AlphaComposite.SrcOver);
+
+            // Foreground: the whole image, full height, centred.
+            double fit = Math.min((double) BANNER_W / src.getWidth(), (double) BANNER_H / src.getHeight());
+            int fw = (int) Math.round(src.getWidth() * fit), fh = (int) Math.round(src.getHeight() * fit);
+            g.drawImage(src, (BANNER_W - fw) / 2, (BANNER_H - fh) / 2, fw, fh, null);
+            g.dispose();
+
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            ImageIO.write(out, ext.equals("png") ? "png" : "jpg", buf);
+            return FileUpload.fromData(buf.toByteArray(), name);
+        } catch (Exception e) {
+            log.warn("Couldn't make a banner from {}: {}", name, e.getMessage());
+            return FileUpload.fromData(bytes, name); // the original stream is used up; resend its bytes
+        }
     }
 
     private String eventName() {
