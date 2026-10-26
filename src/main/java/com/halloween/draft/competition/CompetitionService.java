@@ -509,37 +509,41 @@ public class CompetitionService {
         if (teams.isEmpty()) {
             main.addField("Teams", "*No teams yet — they appear once the draft has run.*", false);
         } else {
-            main.addField("Total hits", "**" + total + "**", true);
-            // Standings as plain text rather than a code block: team names are long and a phone with
-            // a larger text size fits only ~22 monospace characters, so an aligned table wraps badly.
-            // Plain lines wrap cleanly onto the next line instead.
+            main.addField("Total hits", "**" + total + "**\n" + SPACER, true);
+            // Plain text rather than code blocks: a phone with a larger text size fits only ~22
+            // monospace characters, so aligned tables wrap badly. Plain lines wrap like normal text.
+            // Each team gets a short code, shown in the standings and used in Top hitters.
+            Map<String, String> codes = teamCodes(teams);
             StringBuilder standings = new StringBuilder();
             for (int i = 0; i < teams.size(); i++) {
                 TeamScore t = teams.get(i);
                 String rank = i < MEDALS.length ? MEDALS[i] : "`" + (i + 1) + ".`";
                 standings.append(rank).append(' ').append(MarkdownSanitizer.escape(t.name()))
-                        .append(" — **").append(t.total()).append("**\n");
+                        .append(" `").append(codes.get(t.name())).append("` — **")
+                        .append(t.total()).append("**\n");
             }
-            main.addField("🏆 Team standings", standings.toString().stripTrailing(), false);
+            main.addField("🏆 Team standings", standings + SPACER, false);
 
-            // Name and hits only: with the team column too, rows were ~40 characters and wrapped on phones.
-            List<Hitter> hitters = new ArrayList<>();
-            for (TeamScore t : teams) hitters.addAll(t.hitters());
-            hitters.sort(Comparator.comparingInt(Hitter::hits).reversed().thenComparing(Hitter::name, String.CASE_INSENSITIVE_ORDER));
-            List<Hitter> top = hitters.stream().filter(r -> r.hits() > 0).limit(TOP_OVERALL).toList();
+            record Row(String name, int hits, String team, boolean left) {}
+            List<Row> hitters = new ArrayList<>();
+            for (TeamScore t : teams) {
+                for (Hitter h : t.hitters()) hitters.add(new Row(h.name(), h.hits(), t.name(), h.left()));
+            }
+            hitters.sort(Comparator.comparingInt(Row::hits).reversed().thenComparing(Row::name, String.CASE_INSENSITIVE_ORDER));
+            List<Row> top = hitters.stream().filter(r -> r.hits() > 0).limit(TOP_OVERALL).toList();
             if (top.isEmpty()) {
                 main.addField("⚔️ Top hitters", "*No hits yet.*", false);
             } else {
-                int nameWidth = Math.min(NAME_WIDTH, top.stream().mapToInt(r -> r.name().length() + (r.left() ? 1 : 0)).max().orElse(4));
+                // "`1341` Chuck_Norris · SB": hits padded to one width so the names line up.
                 int hitDigits = String.valueOf(top.get(0).hits()).length();
-                StringBuilder table = new StringBuilder("```\n");
-                for (Hitter r : top) {
-                    table.append(pad(r.name() + (r.left() ? "*" : ""), nameWidth)).append("  ")
-                            .append(String.format("%" + hitDigits + "d", r.hits())).append('\n');
+                StringBuilder list = new StringBuilder();
+                for (Row r : top) {
+                    list.append('`').append(String.format("%" + hitDigits + "d", r.hits())).append("` ")
+                            .append(MarkdownSanitizer.escape(r.name())).append(r.left() ? "\\*" : "")
+                            .append(" · **").append(codes.get(r.team())).append("**\n");
                 }
-                table.append("```");
-                main.addField("⚔️ Top hitters", table.toString(), false);
-                anyLeft = top.stream().anyMatch(Hitter::left);
+                main.addField("⚔️ Top hitters", list.toString().stripTrailing(), false);
+                anyLeft = top.stream().anyMatch(Row::left);
             }
         }
 
@@ -559,8 +563,55 @@ public class CompetitionService {
         return embeds;
     }
 
-    /** Top hitters name column: 15 + 2 spaces + 4 digits = 21 characters, under the ~22 a phone fits. */
-    private static final int NAME_WIDTH = 15;
+    /** A zero-width line: Discord trims blank lines, so this is what adds a gap after a field. */
+    private static final String SPACER = "\u200B";
+    private static final Set<String> CODE_SKIP_WORDS = Set.of("the", "of", "and", "a", "an");
+
+    /**
+     * Short codes per team name: word initials ("Basket Bandits" → BB, "The John Frakes Gang" → JFG),
+     * capitals of a single CamelCase word ("GameJunkies" → GJ), else its first three letters
+     * ("Jawbreakers" → JAW). Clashes get the team's rank added (BB, BB2).
+     */
+    static Map<String, String> teamCodes(List<TeamScore> teams) {
+        Map<String, String> codes = new java.util.LinkedHashMap<>();
+        Set<String> used = new HashSet<>();
+        for (int i = 0; i < teams.size(); i++) {
+            String name = teams.get(i).name();
+            if (codes.containsKey(name)) continue;
+            String code = baseCode(name);
+            if (!used.add(code)) {
+                code = code + (i + 1);
+                used.add(code);
+            }
+            codes.put(name, code);
+        }
+        return codes;
+    }
+
+    private static String baseCode(String name) {
+        List<String> words = new ArrayList<>();
+        for (String w : name.trim().split("[\\s_-]+")) {
+            String clean = w.replaceAll("[^\\p{L}\\p{N}]", "");
+            if (!clean.isEmpty()) words.add(clean);
+        }
+        // Skip filler words and ones starting with a digit ("House of 10k Corpses" → HC).
+        List<String> kept = words.stream().filter(w -> !CODE_SKIP_WORDS.contains(w.toLowerCase())
+                && !Character.isDigit(w.charAt(0))).toList();
+        if (kept.isEmpty()) kept = words;
+        if (kept.isEmpty()) return "?";
+        if (kept.size() == 1) {
+            String w = kept.get(0);
+            String caps = w.replaceAll("[^\\p{Lu}]", "");
+            if (caps.length() >= 2 && caps.length() <= 4) return caps;
+            return w.substring(0, Math.min(3, w.length())).toUpperCase();
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String w : kept) {
+            if (sb.length() == 4) break;
+            sb.append(Character.toUpperCase(w.charAt(0)));
+        }
+        return sb.toString();
+    }
     private static final int TOP_OVERALL = 15;
 
     /** "Blaz [3828215]" → "Blaz"; backticks removed so they can't break the table. */
