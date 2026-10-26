@@ -405,7 +405,9 @@ public class CompetitionService {
             List<TeamScore> teams = teamScores(f);
             TeamScore featured = featured(c, teams);
             String wanted = featured == null ? "" : TeamImageService.fileName(featured.imageId(), featured.imageExt());
-            boolean upload = !wanted.equals(c.scoreboardImageSig == null ? "" : c.scoreboardImageSig);
+            // The stored signature is the file name plus IMAGE_STYLE, so changing how the image is drawn
+            // (the banner) re-uploads it once even when the leading team hasn't changed.
+            boolean upload = !sig(wanted).equals(c.scoreboardImageSig == null ? "" : c.scoreboardImageSig);
             if (c.scoreboardMessageId != null) {
                 try {
                     FileUpload file = upload && featured != null ? banner(images.upload(featured.imageId(), featured.imageExt())) : null;
@@ -414,7 +416,7 @@ public class CompetitionService {
                             .setComponents(teamsButtonRow(f));
                     if (upload) edit = edit.setFiles(file == null ? List.<FileUpload>of() : List.of(file));
                     edit.complete();
-                    if (upload) drafts.updateCompetition(f, x -> x.scoreboardImageSig = shown == null ? "" : shown);
+                    if (upload) drafts.updateCompetition(f, x -> x.scoreboardImageSig = sig(shown == null ? "" : shown));
                     return;
                 } catch (ErrorResponseException e) {
                     if (e.getErrorResponse() != ErrorResponse.UNKNOWN_MESSAGE) {
@@ -430,7 +432,7 @@ public class CompetitionService {
                         .setFiles(file == null ? List.<FileUpload>of() : List.of(file)).complete();
                 drafts.updateCompetition(f, x -> {
                     x.scoreboardMessageId = msg.getIdLong();
-                    x.scoreboardImageSig = shown == null ? "" : shown;
+                    x.scoreboardImageSig = sig(shown == null ? "" : shown);
                 });
             } catch (Exception e) {
                 log.warn("Scoreboard post failed: {}", e.getMessage());
@@ -671,6 +673,12 @@ public class CompetitionService {
     }
 
     private static final int BANNER_W = 1200, BANNER_H = 400;
+    /** Bump when banner() changes, so every scoreboard re-uploads its image once. */
+    private static final String IMAGE_STYLE = "banner1";
+
+    private static String sig(String fileName) {
+        return fileName.isEmpty() ? "" : fileName + "|" + IMAGE_STYLE;
+    }
 
     /**
      * Turns the team image into a 3:1 banner: the image centred at full height, the sides filled with
