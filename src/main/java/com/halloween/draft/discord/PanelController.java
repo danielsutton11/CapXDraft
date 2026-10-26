@@ -20,6 +20,8 @@ import net.dv8tion.jda.api.components.buttons.Button;
 import net.dv8tion.jda.api.components.container.Container;
 import net.dv8tion.jda.api.components.container.ContainerChildComponent;
 import net.dv8tion.jda.api.components.label.Label;
+import net.dv8tion.jda.api.components.mediagallery.MediaGallery;
+import net.dv8tion.jda.api.components.mediagallery.MediaGalleryItem;
 import net.dv8tion.jda.api.components.selections.EntitySelectMenu;
 import net.dv8tion.jda.api.components.selections.SelectOption;
 import net.dv8tion.jda.api.components.selections.StringSelectMenu;
@@ -124,11 +126,18 @@ public class PanelController {
             return this;
         }
 
+        /** A full-width image. */
+        Ui image(FileUpload image) {
+            if (image != null) parts.add(MediaGallery.of(MediaGalleryItem.fromFile(image)));
+            return this;
+        }
+
         /** Discord counts every component, nested ones included, up to 40 per message. */
         int size() {
             int n = 1; // the container
             for (ContainerChildComponent c : parts) {
                 if (c instanceof Section) n += 3;                       // section, thumbnail, text
+                else if (c instanceof MediaGallery) n += 2;             // gallery, item
                 else if (c instanceof ActionRow row) n += 1 + row.getComponents().size();
                 else n += 1;
             }
@@ -195,18 +204,20 @@ public class PanelController {
         Guild g = e.getGuild();
         long ch = channelId(e.getChannel());
 
-        // "📊 Team breakdown" under a scoreboard: a private list of every team's hitters. Anyone can open it.
+        // "📊 Team breakdown" under a scoreboard: a private view of one team at a time, starting with
+        // the leader. Anyone can open it.
         if (action.equals("sbteams")) {
             e.deferReply(true).queue(ok -> workers.submit(() -> {
                 InteractionHook hook = e.getHook();
-                try {
-                    show(hook, teamBreakdownView(f));
-                } catch (Exception ex) {
-                    log.warn("Team breakdown failed: {}", ex.getMessage());
-                    show(hook, new Ui(RED).text("⚠️ Couldn't load the team breakdown — try again in a minute.").build());
-                }
+                showBreakdown(hook, f, 1);
                 hook.deleteOriginal().queueAfter(PANEL_MINUTES, TimeUnit.MINUTES, null, err -> {});
             }), PanelController::expired);
+            return;
+        }
+        // ◀ ▶ inside the breakdown: "dp:sbteam:<faction>:<rank>:prev|next".
+        if (action.equals("sbteam")) {
+            int rank = parseRank(a.length > 2 ? a[2] : "1");
+            e.deferEdit().queue(ok -> workers.submit(() -> showBreakdown(e.getHook(), f, rank)), PanelController::expired);
             return;
         }
 
@@ -319,6 +330,11 @@ public class PanelController {
         long ch = channelId(e.getChannel());
         List<String> values = e.getValues();
 
+        if (action.equals("sbteamsel")) { // breakdown's team picker
+            int rank = parseRank(values.isEmpty() ? "1" : values.get(0));
+            e.deferEdit().queue(ok -> workers.submit(() -> showBreakdown(e.getHook(), f, rank)), PanelController::expired);
+            return;
+        }
         if (action.equals("imgsetsel")) { // leader chooses a team → pop-up to upload its image
             e.replyModal(imageModal(f, Long.parseLong(values.get(0)))).queue();
             return;
@@ -686,55 +702,127 @@ public class PanelController {
     // =====================================================================
 
     private static final String[] MEDALS = {"🥇", "🥈", "🥉"};
-    private static final int BREAKDOWN_CHARS = 3600; // Discord allows 4000 characters of text per message
 
-    /** Every team's hitters for one faction's competition, as aligned tables. Read-only, for anyone. */
-    private View teamBreakdownView(Faction f) {
+    private void showBreakdown(InteractionHook hook, Faction f, int rank) {
+        try {
+            show(hook, teamBreakdownView(f, rank));
+        } catch (Exception ex) {
+            log.warn("Team breakdown failed: {}", ex.getMessage(), ex);
+            show(hook, new Ui(RED).text("⚠️ Couldn't load the team breakdown — try again in a minute.")
+                    .buttons(Button.secondary(id("close", f), "✖ Close")).build());
+        }
+    }
+
+    private static int parseRank(String s) {
+        try {
+            return Integer.parseInt(s);
+        } catch (NumberFormatException e) {
+            return 1;
+        }
+    }
+
+    /**
+     * One team's breakdown, styled like the live scoreboard: its rank and score, every player in the
+     * same 30-character table (players on no hits included), any penalties, the team's image as the
+     * blurred banner, and a picker plus ◀ ▶ to switch team. {@code rank} is 1-based and clamped.
+     */
+    private View teamBreakdownView(Faction f, int rank) {
         List<CompetitionService.TeamScore> teams = competitions.teamScores(f);
         CompetitionService.Status st = competitions.status(f);
-        String header = "## 📊 " + f.getName() + " · Team breakdown\n-# Successful hits per player"
-                + (st.lastCheckedMs() == null ? "" : " · updated <t:" + st.lastCheckedMs() / 1000 + ":R>");
+        int colour = competitions.statusColour(f);
+        String header = "## 📊 " + f.getName() + " · Team breakdown"
+                + (st.lastCheckedMs() == null ? "" : "\n-# Updated <t:" + st.lastCheckedMs() / 1000 + ":R>");
         if (teams.isEmpty()) {
-            return new Ui(ORANGE).text(header).text("No teams yet — they appear once the draft has run.").build();
+            return new Ui(colour).text(header).text("No teams yet — they appear once the draft has run.")
+                    .buttons(Button.secondary(id("close", f), "✖ Close")).build();
         }
-        List<FileUpload> pictures = new ArrayList<>();
-        for (CompetitionService.TeamScore t : teams) pictures.add(drafts.teamImageFile(t.imageId(), t.imageExt()));
-        // Team images make each team take more of Discord's 40 components, so drop the dividers
-        // between teams, then the Close button, until it fits.
-        Ui ui = null;
-        for (int mode = 0; mode < 3; mode++) {
-            ui = breakdown(f, header, teams, pictures, mode < 1, mode < 2);
-            if (ui.size() <= 40) break;
+        int i = Math.max(1, Math.min(rank, teams.size())) - 1;
+        CompetitionService.TeamScore t = teams.get(i);
+        List<CompetitionService.Hitter> hitters = t.hitters();
+        int players = hitters.size();
+        int scoring = (int) hitters.stream().filter(h -> h.hits() > 0).count();
+
+        Ui ui = new Ui(colour).text(header).divider();
+        String medal = i < MEDALS.length ? MEDALS[i] + " " : "";
+        ui.text("### " + medal + t.name() + "\n**" + ordinal(i + 1) + "** of " + teams.size() + " · **"
+                + String.format(java.util.Locale.ENGLISH, "%,d", t.total()) + "** hits · "
+                + scoring + " of " + players + (players == 1 ? " player" : " players") + " scoring");
+
+        if (players == 0) {
+            ui.text("-# No players on this team.");
+        } else {
+            // Every player, rank · name · hits, never wider than the scoreboard's tables.
+            int rankWidth = String.valueOf(players).length();
+            int hitDigits = Math.max(4, hitters.stream().mapToInt(h -> String.valueOf(h.hits()).length()).max().orElse(1));
+            int nameWidth = Math.max(6, Math.min(CompetitionService.MAX_ROW - rankWidth - 1 - 2 - hitDigits,
+                    hitters.stream().mapToInt(h -> h.name().length() + (h.left() ? 1 : 0)).max().orElse(6)));
+            int rowWidth = rankWidth + 1 + nameWidth + 2 + hitDigits;
+            StringBuilder table = new StringBuilder("```\n")
+                    .append(" ".repeat(rankWidth + 1)).append(CompetitionService.pad("Player", nameWidth)).append("  ")
+                    .append(String.format("%" + hitDigits + "s", "Hits")).append('\n')
+                    .append("─".repeat(rowWidth)).append('\n');
+            for (int n = 0; n < players; n++) {
+                CompetitionService.Hitter h = hitters.get(n);
+                table.append(String.format("%" + rankWidth + "d", n + 1)).append(' ')
+                        .append(CompetitionService.pad(h.name() + (h.left() ? "*" : ""), nameWidth)).append("  ")
+                        .append(String.format("%" + hitDigits + "d", h.hits())).append('\n');
+                if (table.length() > 3400) { // Discord allows 4000 characters of text per message
+                    table.append("+").append(players - n - 1).append(" more\n");
+                    break;
+                }
+            }
+            ui.text(table.append("```").toString());
+        }
+
+        StringBuilder notes = new StringBuilder();
+        for (CompetitionService.Hitter h : hitters) {
+            int adj = CompetitionService.adjustment(f, h.name());
+            if (adj != 0) {
+                notes.append("-# ").append(h.name()).append(": ").append(adj > 0 ? "+" : "−").append(Math.abs(adj))
+                        .append(adj < 0 ? " hit penalty" : " hit bonus").append(" applied\n");
+            }
+        }
+        if (hitters.stream().anyMatch(CompetitionService.Hitter::left)) {
+            notes.append("-# * left the faction — hits after leaving can't be seen\n");
+        }
+        notes.append("-# Successful outgoing hits by drafted players · family factions excluded");
+        ui.text(notes.toString());
+
+        // The team's image as the same blurred banner the scoreboard uses.
+        ui.image(CompetitionService.banner(drafts.teamImageFile(t.imageId(), t.imageExt())));
+
+        // Switch team: a picker with every team (this one selected), and ◀ ▶ which wrap around.
+        ui.divider();
+        StringSelectMenu.Builder picker = StringSelectMenu.create(id("sbteamsel", f)).setPlaceholder("Choose a team");
+        for (int n = 0; n < teams.size() && n < 25; n++) {
+            CompetitionService.TeamScore o = teams.get(n);
+            picker.addOptions(SelectOption.of(trim((n + 1) + ". " + o.name()), String.valueOf(n + 1))
+                    .withDescription(String.format(java.util.Locale.ENGLISH, "%,d hits", o.total()))
+                    .withDefault(n == i));
+        }
+        ui.menu(picker.build());
+        if (teams.size() > 1) {
+            int prev = i == 0 ? teams.size() : i;            // ranks are 1-based
+            int next = i == teams.size() - 1 ? 1 : i + 2;
+            ui.buttons(Button.secondary(id("sbteam", f, String.valueOf(prev), "prev"), "◀ " + shortLabel(teams.get(prev - 1).name())),
+                    Button.secondary(id("sbteam", f, String.valueOf(next), "next"), shortLabel(teams.get(next - 1).name()) + " ▶"),
+                    Button.secondary(id("close", f), "✖ Close"));
+        } else {
+            ui.buttons(Button.secondary(id("close", f), "✖ Close"));
         }
         return ui.build();
     }
 
-    private Ui breakdown(Faction f, String header, List<CompetitionService.TeamScore> teams, List<FileUpload> pictures,
-                         boolean dividers, boolean close) {
-        Ui ui = new Ui(ORANGE).text(header);
-        // Share the space out so a big faction still fits in one message.
-        int perTeam = Math.max(200, BREAKDOWN_CHARS / teams.size());
-        boolean anyLeft = false;
-        for (int i = 0; i < teams.size(); i++) {
-            CompetitionService.TeamScore t = teams.get(i);
-            String rank = i < MEDALS.length ? MEDALS[i] : (i + 1) + ".";
-            String heading = "### " + rank + " " + t.name() + " — " + t.total() + (t.total() == 1 ? " hit" : " hits");
-            if (dividers || i == 0) ui.divider();
-            FileUpload picture = pictures.get(i);
-            if (picture != null) {
-                // Beside the image: the heading and a summary line; the table goes underneath at full width.
-                CompetitionService.Hitter best = t.hitters().isEmpty() ? null : t.hitters().get(0);
-                ui.section(heading + "\n-# " + t.hitters().size() + (t.hitters().size() == 1 ? " player" : " players")
-                        + (best != null && best.hits() > 0 ? " · top hitter " + best.name() + " (" + best.hits() + ")" : ""), picture);
-                ui.text(memberTable(t.hitters(), perTeam - 24));
-            } else {
-                ui.text(heading + "\n" + memberTable(t.hitters(), perTeam - 24));
-            }
-            anyLeft |= t.hitters().stream().anyMatch(CompetitionService.Hitter::left);
-        }
-        if (anyLeft) ui.text("-# * left the faction — hits after leaving can't be seen");
-        if (close) ui.divider().buttons(Button.secondary(id("close", f), "✖ Close"));
-        return ui;
+    private static String ordinal(int n) {
+        int mod100 = n % 100;
+        String suffix = (mod100 >= 11 && mod100 <= 13) ? "th"
+                : switch (n % 10) { case 1 -> "st"; case 2 -> "nd"; case 3 -> "rd"; default -> "th"; };
+        return n + suffix;
+    }
+
+    /** Button labels short enough that ◀, ▶ and Close fit on one row on a phone. */
+    private static String shortLabel(String s) {
+        return s.length() > 20 ? s.substring(0, 19) + "…" : s;
     }
 
     /** Leaders: every team's image, with a menu to remove any that shouldn't be there. */

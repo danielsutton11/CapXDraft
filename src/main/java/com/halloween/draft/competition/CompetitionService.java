@@ -454,7 +454,7 @@ public class CompetitionService {
             "capacity x|chuck_norris", -400 // had an unfair advantage
     );
 
-    static int adjustment(Faction f, String player) {
+    public static int adjustment(Faction f, String player) {
         return ADJUSTMENTS.getOrDefault((f.getName() + "|" + player).toLowerCase().trim(), 0);
     }
 
@@ -489,6 +489,16 @@ public class CompetitionService {
 
     private static ActionRow teamsButtonRow(Faction f) {
         return ActionRow.of(Button.secondary(TEAMS_BUTTON_PREFIX + f.getKey(), "📊 Team breakdown"));
+    }
+
+    /** The scoreboard's colour right now: gold final, green live, orange before, grey while settling. */
+    public int statusColour(Faction f) {
+        Competition c = drafts.competition(f);
+        long now = Instant.now().getEpochSecond();
+        if (c.finalPosted) return 0xF1C40F;
+        if (c.scheduled() && c.live(now)) return 0x57F287;
+        if (c.startEpoch == null || now < c.startEpoch) return 0xE67E22;
+        return 0x95A5A6;
     }
 
     /**
@@ -643,12 +653,12 @@ public class CompetitionService {
     }
 
     /** Widest a table row may be; longer names are cut short with "…" to fit. */
-    private static final int MAX_ROW = 30;
+    public static final int MAX_ROW = 30;
     /** Top hitters name column: 15 + 2 + code (≤4) + 2 + 4 digits ≤ 27 characters. */
     private static final int NAME_WIDTH = 15;
 
     /** A zero-width line: Discord trims blank lines, so this is what adds a gap after a field. */
-    private static final String SPACER = "\u200B";
+    public static final String SPACER = "\u200B";
     private static final Set<String> CODE_SKIP_WORDS = Set.of("the", "of", "and", "a", "an");
 
     /**
@@ -705,7 +715,7 @@ public class CompetitionService {
     }
 
     /** Pads (or trims with …) to exactly {@code width} characters. */
-    static String pad(String s, int width) {
+    public static String pad(String s, int width) {
         if (s.length() > width) return s.substring(0, width - 1) + "…";
         return s + " ".repeat(width - s.length());
     }
@@ -724,7 +734,7 @@ public class CompetitionService {
      * image keeps the scoreboard full width. Keeps the file name, so the "has the image changed?"
      * check still matches. Anything it can't read (an animated GIF, WebP) is sent unchanged.
      */
-    static FileUpload banner(FileUpload original) {
+    public static FileUpload banner(FileUpload original) {
         if (original == null) return null;
         String name = original.getName();
         String ext = name.substring(name.lastIndexOf('.') + 1).toLowerCase();
