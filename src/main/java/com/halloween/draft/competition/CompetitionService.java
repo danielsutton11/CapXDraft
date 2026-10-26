@@ -23,6 +23,7 @@ import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.exceptions.ErrorResponseException;
 import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.utils.FileUpload;
+import net.dv8tion.jda.api.utils.MarkdownSanitizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -509,20 +510,17 @@ public class CompetitionService {
             main.addField("Teams", "*No teams yet — they appear once the draft has run.*", false);
         } else {
             main.addField("Total hits", "**" + total + "**", true);
-            // Two aligned tables: teams ranked by total, then the top hitters across every team.
-            // Code blocks keep the columns straight and stop names being read as formatting.
-            int teamWidth = Math.min(TEAM_WIDTH, teams.stream().mapToInt(t -> t.name().length()).max().orElse(4));
-            int rankWidth = String.valueOf(teams.size()).length() + 1;
-            int teamDigits = String.valueOf(Math.max(total, 0)).length();
-            StringBuilder standings = new StringBuilder("```\n");
+            // Standings as plain text rather than a code block: team names are long and a phone with
+            // a larger text size fits only ~22 monospace characters, so an aligned table wraps badly.
+            // Plain lines wrap cleanly onto the next line instead.
+            StringBuilder standings = new StringBuilder();
             for (int i = 0; i < teams.size(); i++) {
                 TeamScore t = teams.get(i);
-                standings.append(pad((i + 1) + ".", rankWidth)).append(' ')
-                        .append(pad(t.name(), teamWidth)).append("  ")
-                        .append(String.format("%" + teamDigits + "d", t.total())).append('\n');
+                String rank = i < MEDALS.length ? MEDALS[i] : "`" + (i + 1) + ".`";
+                standings.append(rank).append(' ').append(MarkdownSanitizer.escape(t.name()))
+                        .append(" — **").append(t.total()).append("**\n");
             }
-            standings.append("```");
-            main.addField("🏆 Team standings", standings.toString(), false);
+            main.addField("🏆 Team standings", standings.toString().stripTrailing(), false);
 
             // Name and hits only: with the team column too, rows were ~40 characters and wrapped on phones.
             List<Hitter> hitters = new ArrayList<>();
@@ -561,8 +559,8 @@ public class CompetitionService {
         return embeds;
     }
 
-    private static final int NAME_WIDTH = 18;
-    private static final int TEAM_WIDTH = 24;
+    /** Top hitters name column: 15 + 2 spaces + 4 digits = 21 characters, under the ~22 a phone fits. */
+    private static final int NAME_WIDTH = 15;
     private static final int TOP_OVERALL = 15;
 
     /** "Blaz [3828215]" → "Blaz"; backticks removed so they can't break the table. */
