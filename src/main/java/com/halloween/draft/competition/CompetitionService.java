@@ -552,9 +552,12 @@ public class CompetitionService {
         main.setFooter("Successful outgoing hits by drafted players · family factions excluded"
                 + (anyLeft ? " · * left the faction" : "") + " · " + updated);
 
+        // No thumbnail: on mobile it reserves a column down the whole right side of the embed and
+        // squeezes every field into the left part. While live, the leader's image is the small author
+        // icon above the title instead; on the final results it's the large image at the bottom.
         if (imageFile != null) {
             if (c.finalPosted) main.setImage("attachment://" + imageFile);
-            else main.setThumbnail("attachment://" + imageFile);
+            else if (!teams.isEmpty()) main.setAuthor("Leading: " + teams.get(0).name(), null, "attachment://" + imageFile);
         }
 
         List<MessageEmbed> embeds = new ArrayList<>();
