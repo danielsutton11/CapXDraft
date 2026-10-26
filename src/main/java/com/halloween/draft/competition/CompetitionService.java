@@ -584,14 +584,16 @@ public class CompetitionService {
                             .append(pad(codes.get(r.team()), codeWidth)).append(hittersGap)
                             .append(String.format("%" + hitDigits + "d", r.hits())).append('\n');
                 }
-                main.addField("⚔️ Top hitters", table.append("```").toString(), false);
+                main.addField("⚔️ Top hitters", table.append("```\n").append(SPACER).toString(), false);
                 anyLeft = top.stream().anyMatch(Row::left);
             }
 
             // Says whose image is underneath: Discord always puts the embed image after the fields.
             if (imageFile != null) {
-                main.addField(SPACER, (c.finalPosted ? "🏆 **Winners: " : "👑 **Leading: ")
-                        + MarkdownSanitizer.escape(teams.get(0).name()) + "**", false);
+                // A real heading, like the other sections: mobile drops a field whose heading is blank,
+                // and the gap above comes from the spacer line at the end of Top hitters.
+                main.addField((c.finalPosted ? "🏆 Winners: " : "👑 Leading: ")
+                        + MarkdownSanitizer.escape(teams.get(0).name()), SPACER, false);
             }
         }
 
@@ -681,7 +683,7 @@ public class CompetitionService {
 
     private static final int BANNER_W = 1200, BANNER_H = 400;
     /** Bump when banner() changes, so every scoreboard re-uploads its image once. */
-    private static final String IMAGE_STYLE = "banner1";
+    private static final String IMAGE_STYLE = "banner2";
 
     private static String sig(String fileName) {
         return fileName.isEmpty() ? "" : fileName + "|" + IMAGE_STYLE;
@@ -745,7 +747,8 @@ public class CompetitionService {
 
             ByteArrayOutputStream buf = new ByteArrayOutputStream();
             ImageIO.write(out, ext.equals("png") ? "png" : "jpg", buf);
-            return FileUpload.fromData(buf.toByteArray(), name);
+            // No description: Discord's mobile app puts an "ALT" badge on any image that has one.
+            return FileUpload.fromData(buf.toByteArray(), name).setDescription(null);
         } catch (Exception e) {
             log.warn("Couldn't make a banner from {}: {}", name, e.getMessage());
             return FileUpload.fromData(bytes, name); // the original stream is used up; resend its bytes
