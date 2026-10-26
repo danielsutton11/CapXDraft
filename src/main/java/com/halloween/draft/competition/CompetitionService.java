@@ -445,6 +445,19 @@ public class CompetitionService {
     /** A team's total and every member's hits, highest first. */
     public record TeamScore(String name, int total, List<Hitter> hitters, Long imageId, String imageExt) {}
 
+    /**
+     * Manual hit adjustments for individual players, keyed "faction name|player name" (the name
+     * without its [ID]; case doesn't matter). Negative is a penalty. Applied to the player's hits,
+     * so their team's total and ranking follow, and noted under Top hitters.
+     */
+    private static final Map<String, Integer> ADJUSTMENTS = Map.of(
+            "capacity x|chuck_norris", -400 // had an unfair advantage
+    );
+
+    static int adjustment(Faction f, String player) {
+        return ADJUSTMENTS.getOrDefault((f.getName() + "|" + player).toLowerCase().trim(), 0);
+    }
+
     /** Every team's score for the faction's competition, best team first. Empty before the draft. */
     public List<TeamScore> teamScores(Faction f) {
         Competition c = drafts.competition(f);
@@ -458,7 +471,9 @@ public class CompetitionService {
             List<Hitter> hitters = new ArrayList<>();
             for (RosterMember m : t.members()) {
                 int n = m.tornId() == null ? 0 : hits.getOrDefault(m.tornId(), 0);
-                hitters.add(new Hitter(cleanName(m.display()), n, m.tornId() != null && left.contains(m.tornId())));
+                String name = cleanName(m.display());
+                n = Math.max(0, n + adjustment(f, name));
+                hitters.add(new Hitter(name, n, m.tornId() != null && left.contains(m.tornId())));
             }
             hitters.sort(Comparator.comparingInt(Hitter::hits).reversed()
                     .thenComparing(Hitter::name, String.CASE_INSENSITIVE_ORDER));
@@ -584,7 +599,18 @@ public class CompetitionService {
                             .append(pad(codes.get(r.team()), codeWidth)).append(hittersGap)
                             .append(String.format("%" + hitDigits + "d", r.hits())).append('\n');
                 }
-                main.addField("⚔️ Top hitters", table.append("```\n").append(SPACER).toString(), false);
+                table.append("```\n");
+                // Note every adjusted player in this faction, listed or not, so the numbers are explained.
+                for (TeamScore t : teams) {
+                    for (Hitter h : t.hitters()) {
+                        int adj = adjustment(f, h.name());
+                        if (adj == 0) continue;
+                        table.append("*").append(MarkdownSanitizer.escape(h.name())).append(": ")
+                                .append(adj > 0 ? "+" : "−").append(Math.abs(adj))
+                                .append(adj < 0 ? " hit penalty" : " hit bonus").append(" applied*\n");
+                    }
+                }
+                main.addField("⚔️ Top hitters", table.append(SPACER).toString(), false);
                 anyLeft = top.stream().anyMatch(Row::left);
             }
 
