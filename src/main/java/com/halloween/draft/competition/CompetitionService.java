@@ -23,6 +23,7 @@ import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.exceptions.ErrorResponseException;
 import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.utils.FileUpload;
+import net.dv8tion.jda.api.utils.MarkdownSanitizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -511,20 +512,10 @@ public class CompetitionService {
             main.addField("Total hits", "**" + total + "**\n" + SPACER, true);
             // Code blocks so names line up on the left and numbers on the right. With no thumbnail the
             // fields get the embed's full width; rows are kept to ~31 characters, which a phone with a
-            // larger text size still fits.
+            // larger text size still fits. A code block always fills the field's width, so numbers can't
+            // sit against its right edge; instead both tables are padded to the same row width, so
+            // their number columns end in the same place on every screen.
             Map<String, String> codes = teamCodes(teams);
-            int rankWidth = String.valueOf(teams.size()).length() + 1;
-            int teamWidth = Math.min(TEAM_WIDTH, teams.stream().mapToInt(t -> t.name().length()).max().orElse(4));
-            int totalDigits = teams.stream().mapToInt(t -> String.valueOf(t.total()).length()).max().orElse(1);
-            // A zero-width first line gives a gap between the field heading and its table.
-            StringBuilder standings = new StringBuilder(SPACER + "\n```\n");
-            for (int i = 0; i < teams.size(); i++) {
-                TeamScore t = teams.get(i);
-                standings.append(pad((i + 1) + ".", rankWidth)).append(' ')
-                        .append(pad(t.name(), teamWidth)).append("  ")
-                        .append(String.format("%" + totalDigits + "d", t.total())).append('\n');
-            }
-            main.addField("🏆 Team standings", standings.append("```\n").append(SPACER).toString(), false);
 
             record Row(String name, int hits, String team, boolean left) {}
             List<Row> hitters = new ArrayList<>();
@@ -533,21 +524,48 @@ public class CompetitionService {
             }
             hitters.sort(Comparator.comparingInt(Row::hits).reversed().thenComparing(Row::name, String.CASE_INSENSITIVE_ORDER));
             List<Row> top = hitters.stream().filter(r -> r.hits() > 0).limit(TOP_OVERALL).toList();
+
+            int rankWidth = String.valueOf(teams.size()).length() + 1;
+            int teamWidth = Math.min(TEAM_WIDTH, teams.stream().mapToInt(t -> t.name().length()).max().orElse(4));
+            int totalDigits = teams.stream().mapToInt(t -> String.valueOf(t.total()).length()).max().orElse(1);
+            int nameWidth = Math.min(NAME_WIDTH, top.stream().mapToInt(r -> r.name().length() + (r.left() ? 1 : 0)).max().orElse(4));
+            int codeWidth = top.stream().mapToInt(r -> codes.get(r.team()).length()).max().orElse(2);
+            int hitDigits = top.isEmpty() ? 1 : String.valueOf(top.get(0).hits()).length();
+
+            int standingsRow = rankWidth + 1 + teamWidth + 2 + totalDigits;
+            int hittersRow = nameWidth + 2 + codeWidth + 2 + hitDigits;
+            int rowWidth = Math.max(standingsRow, top.isEmpty() ? 0 : hittersRow);
+            String standingsGap = " ".repeat(2 + rowWidth - standingsRow);
+            String hittersGap = " ".repeat(2 + rowWidth - hittersRow);
+
+            // A zero-width first line gives a gap between the field heading and its table.
+            StringBuilder standings = new StringBuilder(SPACER + "\n```\n");
+            for (int i = 0; i < teams.size(); i++) {
+                TeamScore t = teams.get(i);
+                standings.append(pad((i + 1) + ".", rankWidth)).append(' ')
+                        .append(pad(t.name(), teamWidth)).append(standingsGap)
+                        .append(String.format("%" + totalDigits + "d", t.total())).append('\n');
+            }
+            main.addField("🏆 Team standings", standings.append("```\n").append(SPACER).toString(), false);
+
             if (top.isEmpty()) {
                 main.addField("⚔️ Top hitters", SPACER + "\n*No hits yet.*", false);
             } else {
-                // "Chuck_Norris     SB  1341": name, team code, hits right-aligned.
-                int nameWidth = Math.min(NAME_WIDTH, top.stream().mapToInt(r -> r.name().length() + (r.left() ? 1 : 0)).max().orElse(4));
-                int codeWidth = top.stream().mapToInt(r -> codes.get(r.team()).length()).max().orElse(2);
-                int hitDigits = String.valueOf(top.get(0).hits()).length();
+                // "Chuck_Norris  SB      1341": name, team code, hits right-aligned.
                 StringBuilder table = new StringBuilder(SPACER + "\n```\n");
                 for (Row r : top) {
                     table.append(pad(r.name() + (r.left() ? "*" : ""), nameWidth)).append("  ")
-                            .append(pad(codes.get(r.team()), codeWidth)).append("  ")
+                            .append(pad(codes.get(r.team()), codeWidth)).append(hittersGap)
                             .append(String.format("%" + hitDigits + "d", r.hits())).append('\n');
                 }
                 main.addField("⚔️ Top hitters", table.append("```").toString(), false);
                 anyLeft = top.stream().anyMatch(Row::left);
+            }
+
+            // Says whose image is shown underneath: Discord always puts the embed image last.
+            if (imageFile != null) {
+                main.addField(SPACER, (c.finalPosted ? "🏆 **Winners: " : "👑 **Leading: ")
+                        + MarkdownSanitizer.escape(teams.get(0).name()) + "**", false);
             }
         }
 
