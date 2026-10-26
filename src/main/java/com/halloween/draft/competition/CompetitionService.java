@@ -505,7 +505,10 @@ public class CompetitionService {
     /** {@code imageFile}: the attached team image to show, or null — large on the final results, small otherwise. */
     private List<MessageEmbed> render(Faction f, Competition c, List<TeamScore> teams, String imageFile) {
         long now = Instant.now().getEpochSecond();
-        int total = teams.stream().mapToInt(TeamScore::total).sum();
+        // Total hits is the real count: player penalties come off their own and their team's score
+        // in the tables, but not off how many hits were actually made.
+        int total = teams.stream().mapToInt(TeamScore::total).sum()
+                - teams.stream().flatMap(t -> t.hitters().stream()).mapToInt(h -> adjustment(f, h.name())).sum();
 
         // Status heading and colour: green while live, orange before, grey while the last hits come in, gold when final.
         String status;
