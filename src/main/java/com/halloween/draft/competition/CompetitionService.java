@@ -535,20 +535,27 @@ public class CompetitionService {
             hitters.sort(Comparator.comparingInt(Row::hits).reversed().thenComparing(Row::name, String.CASE_INSENSITIVE_ORDER));
             List<Row> top = hitters.stream().filter(r -> r.hits() > 0).limit(TOP_OVERALL).toList();
 
-            int rankWidth = String.valueOf(teams.size()).length() + 1;
-            int teamWidth = Math.min(TEAM_WIDTH, teams.stream().mapToInt(t -> t.name().length()).max().orElse(4));
+            // Rank without a dot ("1 Spooky Pandas") saves a character for long team names.
+            int rankWidth = String.valueOf(teams.size()).length();
+            int teamWidth = teams.stream().mapToInt(t -> t.name().length()).max().orElse(4);
             int totalDigits = teams.stream().mapToInt(t -> String.valueOf(t.total()).length()).max().orElse(1);
             // At least as wide as the column headers: Player, Team, Hits.
             int nameWidth = Math.max(6, Math.min(NAME_WIDTH, top.stream().mapToInt(r -> r.name().length() + (r.left() ? 1 : 0)).max().orElse(4)));
             int codeWidth = Math.max(4, top.stream().mapToInt(r -> codes.get(r.team()).length()).max().orElse(2));
             int hitDigits = Math.max(4, top.isEmpty() ? 1 : String.valueOf(top.get(0).hits()).length());
 
-            teamWidth = Math.max(4, teamWidth);
-            totalDigits = Math.max(5, totalDigits); // fits the "Total" heading
-            int standingsRow = rankWidth + 1 + teamWidth + 2 + totalDigits;
-            int hittersRow = nameWidth + 2 + codeWidth + 2 + hitDigits;
+            // Every row is at most MAX_ROW characters: a phone with a larger text size fits ~31, and a
+            // row even one character over wraps every line of the table. The total column is at
+            // least 5 wide (the "Total" heading), so one space before it still reads as a gap.
+            totalDigits = Math.max(5, totalDigits);
+            int standingsFixed = rankWidth + 1 + 1 + totalDigits;
+            teamWidth = Math.max(4, Math.min(teamWidth, MAX_ROW - standingsFixed));
+            int standingsRow = standingsFixed + teamWidth;
+            int hittersFixed = 2 + codeWidth + 2 + hitDigits;
+            nameWidth = Math.min(nameWidth, MAX_ROW - hittersFixed);
+            int hittersRow = hittersFixed + nameWidth;
             int rowWidth = Math.max(standingsRow, top.isEmpty() ? 0 : hittersRow);
-            String standingsGap = " ".repeat(2 + rowWidth - standingsRow);
+            String standingsGap = " ".repeat(1 + rowWidth - standingsRow);
             String hittersGap = " ".repeat(2 + rowWidth - hittersRow);
 
             // A zero-width first line gives a gap between the field heading and its table.
@@ -558,7 +565,7 @@ public class CompetitionService {
                     .append("─".repeat(rowWidth)).append('\n');
             for (int i = 0; i < teams.size(); i++) {
                 TeamScore t = teams.get(i);
-                standings.append(pad((i + 1) + ".", rankWidth)).append(' ')
+                standings.append(String.format("%" + rankWidth + "d", i + 1)).append(' ')
                         .append(pad(t.name(), teamWidth)).append(standingsGap)
                         .append(String.format("%" + totalDigits + "d", t.total())).append('\n');
             }
@@ -604,8 +611,8 @@ public class CompetitionService {
         return embeds;
     }
 
-    /** Team name column in the standings: "1. " + 22 + 2 spaces + 4 digits = 31 characters. */
-    private static final int TEAM_WIDTH = 22;
+    /** Widest a table row may be; longer names are cut short with "…" to fit. */
+    private static final int MAX_ROW = 30;
     /** Top hitters name column: 15 + 2 + code (≤4) + 2 + 4 digits ≤ 27 characters. */
     private static final int NAME_WIDTH = 15;
 
