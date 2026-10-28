@@ -306,6 +306,13 @@ public class PanelController {
             case "tdok" -> home(g, m, f, drafts.teardown(g, m, f, a[2].equals("1")));
             case "my" -> captainHome(g, m, f, null);
             case "keys" -> keysView(f, null);
+            case "resync" -> {
+                // Runs in the background; the panel updates itself when it's done (it stays open ~14 min).
+                competitions.resyncInBackground(m, f, r -> show(hook, keysView(f, "🔄 Re-sync finished: " + r.summary())));
+                yield keysView(f, "🔄 Re-syncing every attack since the start — about "
+                        + competitions.resyncMinutes(f) + " min. This panel updates when it's done; the scoreboard "
+                        + "updates by itself if anything new turns up.");
+            }
             case "imgs" -> teamImagesView(m, f, null);
             case "imgrm" -> {
                 String result = drafts.removeTeamImage(g, m, f, m.getIdLong());
@@ -1112,7 +1119,16 @@ public class PanelController {
             }
             ui.menu(menu.build());
         }
-        return ui.buttons(Button.primary(id("keyadd", f), "➕ Add Key"), Button.secondary(id("home", f), "Back")).build();
+        ui.buttons(Button.primary(id("keyadd", f), "➕ Add Key"), Button.secondary(id("home", f), "Back"));
+        if (!keys.isEmpty()) {
+            ui.divider()
+                    .heading("Missing attacks?")
+                    .text("-# Re-reads every attack since the competition started and adds any the scoreboard "
+                            + "missed. Safe to run any time — nothing is ever counted twice. It also runs by itself "
+                            + "every night and once more before the final results.")
+                    .buttons(Button.secondary(id("resync", f), "🔄 Re-sync attacks"));
+        }
+        return ui.build();
     }
 
     // =====================================================================

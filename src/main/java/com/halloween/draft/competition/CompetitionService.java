@@ -72,6 +72,12 @@ public class CompetitionService {
     private static final long KEY_CHECK_MS = 60 * 60_000;
     private static final long MEMBER_CHECK_SECONDS = 15 * 60;
     private static final long OVERLAP_SECONDS = 600; // re-read 10 minutes to catch long fights
+    /** The live poll never looks back further than this; older gaps are the re-sync's job. */
+    private static final long MAX_LOOKBACK_SECONDS = 6 * 3600;
+    /** Re-sync reads the window in slices this long. */
+    private static final long RESYNC_SLICE_SECONDS = 30 * 60;
+    /** Pause between re-sync calls, to stay well inside Torn's 100 calls a minute per key. */
+    private static final long RESYNC_PAUSE_MS = 1_500;
     private static final long DRAFT_WARN_SECONDS = 30 * 60;
     private static final String[] MEDALS = {"🥇", "🥈", "🥉"};
 
@@ -98,6 +104,14 @@ public class CompetitionService {
     /** Drafted Torn IDs no longer in the Torn faction, per faction, from the last member check. */
     private final Map<String, Set<Long>> leftFaction = new ConcurrentHashMap<>();
     private final Map<String, Long> lastMemberCheck = new ConcurrentHashMap<>();
+    /** Factions with a re-sync running, so two can't run at once. */
+    private final Set<String> resyncing = ConcurrentHashMap.newKeySet();
+    /** Runs re-syncs off the poll thread, so a long one never delays the minute-by-minute fetch. */
+    private final ScheduledExecutorService resyncer = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "resync");
+        t.setDaemon(true);
+        return t;
+    });
     private volatile JDA jda;
 
     public CompetitionService(BotProperties props, DraftManager drafts, CompetitionRepository repo,
@@ -117,6 +131,12 @@ public class CompetitionService {
         this.jda = jda;
         scheduler.scheduleWithFixedDelay(() -> guard("Competition tick", this::tick), 15_000, POLL_MS, TimeUnit.MILLISECONDS);
         scheduler.scheduleWithFixedDelay(() -> guard("Key check", this::checkKeys), 5 * 60_000, KEY_CHECK_MS, TimeUnit.MILLISECONDS);
+        // Nightly at 04:30 TCT: re-sync the last 26 hours of every live competition.
+        long nowS = Instant.now().getEpochSecond();
+        long next = (nowS / 86_400) * 86_400 + 4 * 3600 + 1800;
+        if (next <= nowS) next += 86_400;
+        resyncer.scheduleAtFixedRate(() -> guard("Nightly re-sync", this::nightlyResync),
+                next - nowS, 86_400, TimeUnit.SECONDS);
         log.info("Competition monitor running (every {}s)", POLL_MS / 1000);
     }
 
@@ -159,8 +179,19 @@ public class CompetitionService {
             long to = Math.min(now, c.endEpoch);
             // Attacks are filtered on start time, so look back a little: a fight that started just
             // before the window (or the last check) can end inside it. Repeats are ignored on save.
-            long from = (c.lastFetchedEpoch == null ? c.startEpoch : c.lastFetchedEpoch) - OVERLAP_SECONDS;
+            // Look back from whichever is older, the last check or the newest attack we hold, so a
+            // stretch where Torn returned nothing new is asked for again rather than skipped over.
+            long checked = c.lastFetchedEpoch == null ? c.startEpoch : c.lastFetchedEpoch;
+            Long newestHeld = repo.latestStarted(f.getKey());
+            long anchor = newestHeld == null ? checked : Math.min(checked, Math.max(newestHeld, now - MAX_LOOKBACK_SECONDS));
+            long from = Math.max(c.startEpoch, anchor) - OVERLAP_SECONDS;
             boolean fetched = fetch(f, Math.max(0, from), to);
+            // Before marking the results final, re-read the whole window once, so anything the live
+            // poll missed is in.
+            if (fetched && now >= c.endEpoch + 120) {
+                ResyncResult r = resync(f, c.startEpoch, c.endEpoch);
+                log.info("{}: final re-sync {}", f.getName(), r.summary());
+            }
             if (fetched) {
                 drafts.updateCompetition(f, x -> {
                     x.lastFetchedEpoch = to;
@@ -261,9 +292,17 @@ public class CompetitionService {
         for (ApiKey k : order) {
             try {
                 List<AttackRow> rows = torn.outgoing(crypto.decrypt(k.encryptedKey()), f.getTornFactionId(), from, to);
-                repo.saveAttacks(f.getKey(), rows);
+                int added = repo.saveAttacks(f.getKey(), rows);
                 repo.markKeyOk(k.id());
-                log.debug("{}: {} attacks fetched with {}'s key", f.getName(), rows.size(), k.ownerName());
+                long newest = rows.stream().mapToLong(AttackRow::started).max().orElse(0);
+                // Every minute at debug; at info when nothing new has turned up for a while, so a stall
+                // shows exactly what was asked for and what came back.
+                boolean quiet = added == 0 && to - Math.max(newest, from) > 15 * 60;
+                String line = f.getName() + ": asked " + DraftManager.tct(from).substring(11) + "–"
+                        + DraftManager.tct(to).substring(11) + " with " + k.ownerName() + "'s key · got " + rows.size()
+                        + " · newest " + (newest == 0 ? "none" : DraftManager.tct(newest).substring(11)) + " · " + added + " new";
+                if (quiet) log.info(line);
+                else log.debug(line);
                 return true;
             } catch (TornAttackClient.KeyProblem e) {
                 repo.markKeyError(k.id(), e.getMessage());
@@ -321,6 +360,115 @@ public class CompetitionService {
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    // =====================================================================
+    // Re-sync: re-read a window from Torn and add any attacks we don't have
+    // =====================================================================
+
+    public record ResyncResult(long from, long to, int slices, int failedSlices, int seen, int added, boolean skipped) {
+        public String summary() {
+            if (skipped) return "a re-sync is already running for this faction";
+            return DraftManager.tct(from) + " → " + DraftManager.tct(to) + " TCT · " + slices + " slices · "
+                    + seen + " attacks checked · **" + added + " new**"
+                    + (failedSlices > 0 ? " · ⚠️ " + failedSlices + " slices couldn't be read — run it again" : "");
+        }
+    }
+
+    /**
+     * Re-reads [from, to] from Torn in 30-minute slices and stores any attack we don't already have.
+     * Safe to run any number of times (stored attacks are skipped) and alongside the live poll.
+     * Runs on the calling thread; it takes roughly 2 seconds per slice. Refreshes the scoreboard if
+     * anything new turned up.
+     */
+    public ResyncResult resync(Faction f, long from, long to) {
+        if (!resyncing.add(f.getKey())) return new ResyncResult(from, to, 0, 0, 0, 0, true);
+        try {
+            int slices = 0, failed = 0, seen = 0, added = 0;
+            // Start a little early: a fight that started before the window can end inside it.
+            for (long s = Math.max(0, from - OVERLAP_SECONDS); s < to; s += RESYNC_SLICE_SECONDS) {
+                long e = Math.min(to, s + RESYNC_SLICE_SECONDS);
+                slices++;
+                List<AttackRow> rows = fetchSlice(f, s, e);
+                if (rows == null) {
+                    failed++;
+                } else {
+                    seen += rows.size();
+                    added += repo.saveAttacks(f.getKey(), rows);
+                }
+                sleep(RESYNC_PAUSE_MS);
+            }
+            ResyncResult r = new ResyncResult(from, to, slices, failed, seen, added, false);
+            log.info("{}: re-sync {}", f.getName(), r.summary().replace("**", ""));
+            if (added > 0) refreshScoreboard(f);
+            return r;
+        } finally {
+            resyncing.remove(f.getKey());
+        }
+    }
+
+    /** Leader panel: re-sync the whole competition so far, in the background. */
+    public void resyncInBackground(Member invoker, Faction f, java.util.function.Consumer<ResyncResult> done) {
+        requireLeader(invoker, f);
+        Competition c = drafts.competition(f);
+        if (!c.scheduled()) throw new UserError("Set the competition times first.");
+        long now = Instant.now().getEpochSecond();
+        if (now < c.startEpoch) throw new UserError("The competition hasn't started yet — there's nothing to re-sync.");
+        if (resyncing.contains(f.getKey())) throw new UserError("A re-sync is already running for " + f.getName() + ".");
+        if (repo.keys(f.getKey()).isEmpty()) throw new UserError("Add an API key first.");
+        long to = Math.min(now, c.endEpoch);
+        resyncer.execute(() -> {
+            ResyncResult r;
+            try {
+                r = resync(f, c.startEpoch, to);
+            } catch (Exception e) {
+                log.error("{}: re-sync failed", f.getName(), e);
+                r = new ResyncResult(c.startEpoch, to, 0, 1, 0, 0, false);
+            }
+            done.accept(r);
+        });
+    }
+
+    /** How long a re-sync of the competition so far will take, roughly, in minutes. */
+    public int resyncMinutes(Faction f) {
+        Competition c = drafts.competition(f);
+        if (!c.scheduled()) return 0;
+        long to = Math.min(Instant.now().getEpochSecond(), c.endEpoch);
+        long slices = Math.max(1, (to - c.startEpoch + OVERLAP_SECONDS) / RESYNC_SLICE_SECONDS + 1);
+        return (int) Math.max(1, Math.round(slices * 2.0 / 60));
+    }
+
+    /** Nightly: the last 26 hours of every competition that's live or still settling. */
+    void nightlyResync() {
+        long now = Instant.now().getEpochSecond();
+        for (Faction f : props.getFactions()) {
+            if (drafts.isBroken(f)) continue;
+            Competition c = drafts.competition(f);
+            if (!c.scheduled() || c.finalPosted || now < c.startEpoch) continue;
+            try {
+                resync(f, Math.max(c.startEpoch, now - 26 * 3600), Math.min(now, c.endEpoch));
+            } catch (Exception e) {
+                log.error("Nightly re-sync failed for {}", f.getName(), e);
+            }
+        }
+    }
+
+    /** One slice with the faction's keys in turn; null if no key could read it. */
+    private List<AttackRow> fetchSlice(Faction f, long from, long to) {
+        List<ApiKey> keys = repo.keys(f.getKey());
+        List<ApiKey> order = new ArrayList<>(keys.stream().filter(k -> k.lastError() == null).toList());
+        order.addAll(keys.stream().filter(k -> k.lastError() != null).toList());
+        if (!order.isEmpty()) java.util.Collections.rotate(order, -Math.floorMod(rotation.getAndIncrement(), order.size()));
+        for (ApiKey k : order) {
+            try {
+                return torn.outgoing(crypto.decrypt(k.encryptedKey()), f.getTornFactionId(), from, to);
+            } catch (TornAttackClient.KeyProblem e) {
+                repo.markKeyError(k.id(), e.getMessage());
+            } catch (Exception e) {
+                log.warn("{}: re-sync slice with {}'s key failed: {}", f.getName(), k.ownerName(), e.getMessage());
+            }
+        }
+        return null;
     }
 
     // =====================================================================

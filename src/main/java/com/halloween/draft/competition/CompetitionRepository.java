@@ -69,15 +69,25 @@ public class CompetitionRepository {
 
     // ---------- attacks ----------
 
-    public void saveAttacks(String factionKey, Collection<AttackRow> rows) {
-        if (rows.isEmpty()) return;
-        jdbc.batchUpdate("""
+    /** Saves attacks, skipping any already stored. Returns how many were new. */
+    public int saveAttacks(String factionKey, Collection<AttackRow> rows) {
+        if (rows.isEmpty()) return 0;
+        int[] counts = jdbc.batchUpdate("""
                 INSERT INTO competition_attacks
                     (faction_key, attack_id, attacker_id, defender_id, defender_faction, result, started, ended)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (faction_key, attack_id) DO NOTHING
                 """, rows.stream().map(r -> new Object[]{factionKey, r.attackId(), r.attackerId(), r.defenderId(),
                 r.defenderFaction(), r.result(), r.started(), r.ended()}).toList());
+        int added = 0;
+        for (int c : counts) if (c > 0) added += c;
+        return added;
+    }
+
+    /** Start time of the newest stored attack for a faction, or null if there are none. */
+    public Long latestStarted(String factionKey) {
+        return jdbc.queryForObject("SELECT MAX(started) FROM competition_attacks WHERE faction_key = ?",
+                Long.class, factionKey);
     }
 
     /**

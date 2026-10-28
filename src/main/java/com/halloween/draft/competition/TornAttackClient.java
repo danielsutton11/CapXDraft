@@ -27,7 +27,10 @@ import java.util.List;
 public class TornAttackClient {
     private static final Logger log = LoggerFactory.getLogger(TornAttackClient.class);
     private static final String V2 = "https://api.torn.com/v2";
-    private static final int PAGE = 1000; // attacksfull returns up to 1000 rows per call
+    private static final int FULL_PAGE = 1000;   // attacksfull: up to 1000 simplified rows per call
+    private static final int DETAIL_PAGE = 100;  // attacks: up to 100 detailed rows per call
+    /** attacksfull counts as behind when /attacks has an attack this much newer. */
+    private static final long STALE_SECONDS = 120;
 
     /** The key itself is the problem (wrong, no faction access, paused...) - try another key. */
     public static class KeyProblem extends RuntimeException {
@@ -80,41 +83,65 @@ public class TornAttackClient {
      * @throws KeyProblem if the key returns another faction's attacks (its owner has moved faction)
      */
     public List<AttackRow> outgoing(String key, long factionId, long from, long to) {
+        List<AttackRow> full = page("attacksfull", FULL_PAGE, key, factionId, from, to);
+        // attacksfull can stop updating while /attacks carries on (seen 28 Oct: nothing after 18:46
+        // for hours, every call "successful"). One cheap call to /attacks tells us; if attacksfull is
+        // behind, read this window from /attacks instead - slower (100 a page) but current.
+        long fullNewest = full.stream().mapToLong(AttackRow::started).max().orElse(from);
+        JsonNode latest = get(V2 + "/faction/attacks?filters=outgoing&sort=DESC&limit=1&to=" + to, key);
+        long liveNewest = 0;
+        for (JsonNode a : latest.path("attacks")) liveNewest = Math.max(liveNewest, a.path("started").asLong());
+        if (liveNewest > fullNewest + STALE_SECONDS && liveNewest >= from) {
+            log.warn("attacksfull is behind (newest {} vs {} on /attacks) - reading {}-{} from /attacks",
+                    fullNewest, liveNewest, from, to);
+            return page("attacks", DETAIL_PAGE, key, factionId, from, to);
+        }
+        return full;
+    }
+
+    /** Every outgoing attack started in [from, to] from one endpoint, oldest first, page by page. */
+    private List<AttackRow> page(String endpoint, int pageSize, String key, long factionId, long from, long to) {
         List<AttackRow> out = new ArrayList<>();
         long cursor = from;
-        for (int page = 0; page < 50; page++) {
-            JsonNode root = get(V2 + "/faction/attacksfull?filters=outgoing&sort=ASC&limit=" + PAGE
+        for (int page = 0; page < 500; page++) {
+            JsonNode root = get(V2 + "/faction/" + endpoint + "?filters=outgoing&sort=ASC&limit=" + pageSize
                     + "&from=" + cursor + "&to=" + to, key);
             List<AttackRow> rows = parseAttacks(root, factionId);
             out.addAll(rows);
             long newest = rows.stream().mapToLong(AttackRow::started).max().orElse(cursor);
-            if (rows.size() < PAGE || newest <= cursor) break; // last page (or no progress - stop rather than loop)
-            cursor = newest;                                   // overlap by one second; duplicates are ignored on save
+            if (rows.size() < pageSize || newest <= cursor) break; // last page (or no progress - stop rather than loop)
+            cursor = newest;                                       // overlap by one second; duplicates are ignored on save
         }
         return out;
     }
 
     /**
-     * Reads one page of attacksfull. Every outgoing attack names the attacker's faction; if any
-     * belongs to a different faction, the key's owner has moved and the key is no use to us.
+     * Reads one page of attacksfull. Every outgoing attack names the attacker's faction. Torn shows
+     * an attacker's current faction, so one member joining or leaving can put an odd row on a page;
+     * that's kept. Only when every row is another faction's has the key's owner moved, and then the
+     * key is no use to us. (Failing on a single row used to stall fetching for every key.)
      */
     static List<AttackRow> parseAttacks(JsonNode root, long factionId) {
         List<AttackRow> out = new ArrayList<>();
+        int ours = 0;
+        Long foreign = null;
         for (JsonNode a : root.path("attacks")) {
-            Long attackerFaction = nullableLong(a.path("attacker").path("faction_id"));
-            if (attackerFaction != null && attackerFaction != 0 && attackerFaction != factionId) {
-                throw new KeyProblem("it now returns another faction's attacks (faction " + attackerFaction
-                        + ") — its owner has probably left. Remove it and add a current member's key");
-            }
+            Long attackerFaction = factionOf(a.path("attacker"));
+            if (attackerFaction != null && attackerFaction != 0 && attackerFaction != factionId) foreign = attackerFaction;
+            else ours++;
             long started = a.path("started").asLong();
             out.add(new AttackRow(
                     a.path("id").asLong(),
                     nullableLong(a.path("attacker").path("id")),
                     nullableLong(a.path("defender").path("id")),
-                    nullableLong(a.path("defender").path("faction_id")),
+                    factionOf(a.path("defender")),
                     a.path("result").asText("None"),
                     started,
                     a.path("ended").asLong(started)));
+        }
+        if (!out.isEmpty() && ours == 0) {
+            throw new KeyProblem("it now returns another faction's attacks (faction " + foreign
+                    + ") — its owner has probably left. Remove it and add a current member's key");
         }
         return out;
     }
@@ -163,6 +190,12 @@ public class TornAttackClient {
             }
         }
         throw new IllegalStateException("Torn API unreachable");
+    }
+
+    /** attacksfull gives "faction_id"; /attacks gives "faction": {"id": ...} or null. */
+    private static Long factionOf(JsonNode person) {
+        Long flat = nullableLong(person.path("faction_id"));
+        return flat != null ? flat : nullableLong(person.path("faction").path("id"));
     }
 
     private static Long nullableLong(JsonNode n) {
