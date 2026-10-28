@@ -104,6 +104,13 @@ public class CompetitionService {
     /** Drafted Torn IDs no longer in the Torn faction, per faction, from the last member check. */
     private final Map<String, Set<Long>> leftFaction = new ConcurrentHashMap<>();
     private final Map<String, Long> lastMemberCheck = new ConcurrentHashMap<>();
+    /** Watchdog: Torn's newest attack this much newer than ours means we've fallen behind. */
+    private static final long BEHIND_SECONDS = 10 * 60;
+    /** Watchdog: wait at least this long between automatic re-syncs for one faction. */
+    private static final long WATCHDOG_COOLDOWN_SECONDS = 15 * 60;
+    /** Factions the watchdog has DMed about the current stall (cleared once caught up). */
+    private final Set<String> stallAlerted = ConcurrentHashMap.newKeySet();
+    private final Map<String, Long> lastWatchdogResync = new ConcurrentHashMap<>();
     /** Factions with a re-sync running, so two can't run at once. */
     private final Set<String> resyncing = ConcurrentHashMap.newKeySet();
     /** Runs re-syncs off the poll thread, so a long one never delays the minute-by-minute fetch. */
@@ -192,6 +199,7 @@ public class CompetitionService {
                 ResyncResult r = resync(f, c.startEpoch, c.endEpoch);
                 log.info("{}: final re-sync {}", f.getName(), r.summary());
             }
+            if (fetched) watchdog(f, c, now);
             if (fetched) {
                 drafts.updateCompetition(f, x -> {
                     x.lastFetchedEpoch = to;
@@ -451,6 +459,41 @@ public class CompetitionService {
                 log.error("Nightly re-sync failed for {}", f.getName(), e);
             }
         }
+    }
+
+    /**
+     * After each successful fetch: has the bot fallen behind Torn? Torn's newest outgoing attack is
+     * known from the fetch itself (no extra API call). If it's more than 10 minutes newer than the
+     * newest attack stored, re-sync from our newest attack up to now in the background (at most every
+     * 15 minutes), DM the leaders once per stall, and log the details.
+     */
+    private void watchdog(Faction f, Competition c, long now) {
+        Long tornNewest = torn.tornNewest(f.getTornFactionId());
+        if (tornNewest == null) return;
+        Long held = repo.latestStarted(f.getKey());
+        long ours = held == null ? c.startEpoch : held;
+        long behind = Math.min(tornNewest, c.endEpoch) - ours;
+        if (behind <= BEHIND_SECONDS) {
+            if (stallAlerted.remove(f.getKey())) log.info("{}: watchdog — caught up with Torn again", f.getName());
+            return;
+        }
+        log.warn("{}: watchdog — behind Torn by {} min (Torn's newest {} TCT, ours {} TCT)", f.getName(),
+                behind / 60, DraftManager.tct(tornNewest), DraftManager.tct(ours));
+        Long last = lastWatchdogResync.get(f.getKey());
+        if (last != null && now - last < WATCHDOG_COOLDOWN_SECONDS) return;
+        if (resyncing.contains(f.getKey())) return;
+        lastWatchdogResync.put(f.getKey(), now);
+        if (stallAlerted.add(f.getKey())) {
+            dmLeaders(f, "⚠️ **" + f.getName() + ":** the scoreboard fell behind Torn by about " + (behind / 60)
+                    + " min (last attack stored " + DraftManager.tct(ours) + " TCT). Re-syncing automatically — "
+                    + "missing hits will appear on the scoreboard in a few minutes. No action needed.");
+        }
+        long from = Math.max(c.startEpoch, ours);
+        long to = Math.min(now, c.endEpoch);
+        resyncer.execute(() -> guard(f.getName() + " watchdog re-sync", () -> {
+            ResyncResult r = resync(f, from, to);
+            log.info("{}: watchdog re-sync {}", f.getName(), r.summary().replace("**", ""));
+        }));
     }
 
     /** One slice with the faction's keys in turn; null if no key could read it. */

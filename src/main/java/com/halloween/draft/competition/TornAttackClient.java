@@ -42,6 +42,8 @@ public class TornAttackClient {
     public record KeyOwner(long tornId, String name, long factionId) {}
 
     private final ObjectMapper mapper;
+    /** Torn faction ID → start time of the newest outgoing attack Torn reported, from the last fetch. */
+    private final java.util.Map<Long, Long> tornNewest = new java.util.concurrent.ConcurrentHashMap<>();
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
     public TornAttackClient(ObjectMapper mapper) {
@@ -91,6 +93,7 @@ public class TornAttackClient {
         JsonNode latest = get(V2 + "/faction/attacks?filters=outgoing&sort=DESC&limit=1&to=" + to, key);
         long liveNewest = 0;
         for (JsonNode a : latest.path("attacks")) liveNewest = Math.max(liveNewest, a.path("started").asLong());
+        if (liveNewest > 0) tornNewest.merge(factionId, liveNewest, Math::max);
         if (liveNewest > fullNewest + STALE_SECONDS && liveNewest >= from) {
             log.warn("attacksfull is behind (newest {} vs {} on /attacks) - reading {}-{} from /attacks",
                     fullNewest, liveNewest, from, to);
@@ -113,6 +116,14 @@ public class TornAttackClient {
             cursor = newest;                                       // overlap by one second; duplicates are ignored on save
         }
         return out;
+    }
+
+    /**
+     * Start time of the newest outgoing attack Torn has reported for this faction (seen on the
+     * last fetch), or null if none yet. Lets the watchdog spot the bot falling behind Torn.
+     */
+    public Long tornNewest(long factionId) {
+        return tornNewest.get(factionId);
     }
 
     /**
