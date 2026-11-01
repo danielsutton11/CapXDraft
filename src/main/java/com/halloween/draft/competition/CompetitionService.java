@@ -408,7 +408,9 @@ public class CompetitionService {
             }
             ResyncResult r = new ResyncResult(from, to, slices, failed, seen, added, false);
             log.info("{}: re-sync {}", f.getName(), r.summary().replace("**", ""));
-            if (added > 0) refreshScoreboard(f);
+            // Always redraw, so pressing Re-sync also forces the scoreboard up to date (it stops
+            // refreshing by itself once the results are final).
+            refreshScoreboard(f);
             return r;
         } finally {
             resyncing.remove(f.getKey());
