@@ -857,7 +857,7 @@ public class CompetitionService {
      * capitals of a single CamelCase word ("GameJunkies" → GJ), else its first three letters
      * ("Jawbreakers" → JAW). Clashes get the team's rank added (BB, BB2).
      */
-    static Map<String, String> teamCodes(List<TeamScore> teams) {
+    public static Map<String, String> teamCodes(List<TeamScore> teams) {
         Map<String, String> codes = new java.util.LinkedHashMap<>();
         Set<String> used = new HashSet<>();
         for (int i = 0; i < teams.size(); i++) {

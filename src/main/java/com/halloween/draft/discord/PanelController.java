@@ -214,6 +214,12 @@ public class PanelController {
             }), PanelController::expired);
             return;
         }
+        // 🌐 Whole family view and its page buttons: "dp:sbfam:<faction>:<page>".
+        if (action.equals("sbfam")) {
+            int page = a.length > 2 ? Math.max(0, parseRank(a[2])) : 0;
+            e.deferEdit().queue(ok -> workers.submit(() -> showFamily(e.getHook(), f, page)), PanelController::expired);
+            return;
+        }
         // ◀ ▶ inside the breakdown: "dp:sbteam:<faction>:<rank>:prev|next".
         if (action.equals("sbteam")) {
             int rank = parseRank(a.length > 2 ? a[2] : "1");
@@ -338,6 +344,10 @@ public class PanelController {
         List<String> values = e.getValues();
 
         if (action.equals("sbteamsel")) { // breakdown's team picker
+            if (!values.isEmpty() && values.get(0).equals("fam")) {
+                e.deferEdit().queue(ok -> workers.submit(() -> showFamily(e.getHook(), f, 0)), PanelController::expired);
+                return;
+            }
             int rank = parseRank(values.isEmpty() ? "1" : values.get(0));
             e.deferEdit().queue(ok -> workers.submit(() -> showBreakdown(e.getHook(), f, rank)), PanelController::expired);
             return;
@@ -710,9 +720,10 @@ public class PanelController {
 
     private static final String[] MEDALS = {"🥇", "🥈", "🥉"};
 
+    /** {@code rank} 0 = the whole faction; 1, 2, … = that team. */
     private void showBreakdown(InteractionHook hook, Faction f, int rank) {
         try {
-            show(hook, teamBreakdownView(f, rank));
+            show(hook, rank == 0 ? factionBreakdownView(f) : teamBreakdownView(f, rank));
         } catch (Exception ex) {
             log.warn("Team breakdown failed: {}", ex.getMessage(), ex);
             show(hook, new Ui(RED).text("⚠️ Couldn't load the team breakdown — try again in a minute.")
@@ -800,23 +811,243 @@ public class PanelController {
 
         // Switch team: a picker with every team (this one selected), and ◀ ▶ which wrap around.
         ui.divider();
-        StringSelectMenu.Builder picker = StringSelectMenu.create(id("sbteamsel", f)).setPlaceholder("Choose a team");
-        for (int n = 0; n < teams.size() && n < 25; n++) {
-            CompetitionService.TeamScore o = teams.get(n);
-            picker.addOptions(SelectOption.of(trim((n + 1) + ". " + o.name()), String.valueOf(n + 1))
-                    .withDescription(String.format(java.util.Locale.ENGLISH, "%,d hits", o.total()))
-                    .withDefault(n == i));
-        }
-        ui.menu(picker.build());
+        ui.menu(breakdownPicker(f, teams, i + 1));
         if (teams.size() > 1) {
             int prev = i == 0 ? teams.size() : i;            // ranks are 1-based
             int next = i == teams.size() - 1 ? 1 : i + 2;
             ui.buttons(Button.secondary(id("sbteam", f, String.valueOf(prev), "prev"), "◀ " + shortLabel(teams.get(prev - 1).name())),
-                    Button.secondary(id("sbteam", f, String.valueOf(next), "next"), shortLabel(teams.get(next - 1).name()) + " ▶"),
-                    Button.secondary(id("close", f), "✖ Close"));
-        } else {
-            ui.buttons(Button.secondary(id("close", f), "✖ Close"));
+                    Button.secondary(id("sbteam", f, String.valueOf(next), "next"), shortLabel(teams.get(next - 1).name()) + " ▶"));
         }
+        ui.buttons(Button.primary(id("sbteam", f, "0", "all"), "🏰 Whole faction"),
+                Button.primary(id("sbfam", f, "0"), "🌐 Whole family"),
+                Button.secondary(id("close", f), "✖ Close"));
+        return ui.build();
+    }
+
+    /** Team picker for the breakdown: "Whole faction" first, then every team; {@code current} 0 = faction. */
+    private StringSelectMenu breakdownPicker(Faction f, List<CompetitionService.TeamScore> teams, int current) {
+        StringSelectMenu.Builder picker = StringSelectMenu.create(id("sbteamsel", f)).setPlaceholder("Choose a team");
+        picker.addOptions(SelectOption.of("🌐 Whole family", "fam")
+                .withDescription("Every participating faction").withDefault(current == -1));
+        picker.addOptions(SelectOption.of("🏰 Whole faction", "0")
+                .withDescription("Every player, all teams").withDefault(current == 0));
+        for (int n = 0; n < teams.size() && n < 23; n++) {
+            CompetitionService.TeamScore o = teams.get(n);
+            picker.addOptions(SelectOption.of(trim((n + 1) + ". " + o.name()), String.valueOf(n + 1))
+                    .withDescription(String.format(java.util.Locale.ENGLISH, "%,d hits", o.total()))
+                    .withDefault(n + 1 == current));
+        }
+        return picker.build();
+    }
+
+    /**
+     * Every drafted player in the faction, all teams together, ranked by hits: rank · name · team
+     * code · hits, in the same 30-character table as the scoreboard, with a key to the team codes.
+     */
+    private View factionBreakdownView(Faction f) {
+        List<CompetitionService.TeamScore> teams = competitions.teamScores(f);
+        CompetitionService.Status st = competitions.status(f);
+        int colour = competitions.statusColour(f);
+        String header = "## 📊 " + f.getName() + " · Team breakdown"
+                + (st.lastCheckedMs() == null ? "" : "\n-# Updated <t:" + st.lastCheckedMs() / 1000 + ":R>");
+        if (teams.isEmpty()) {
+            return new Ui(colour).text(header).text("No teams yet — they appear once the draft has run.")
+                    .buttons(Button.secondary(id("close", f), "✖ Close")).build();
+        }
+        Map<String, String> codes = CompetitionService.teamCodes(teams);
+        record Row(CompetitionService.Hitter h, String code) {}
+        List<Row> rows = new ArrayList<>();
+        for (CompetitionService.TeamScore t : teams) {
+            for (CompetitionService.Hitter h : t.hitters()) rows.add(new Row(h, codes.get(t.name())));
+        }
+        rows.sort(java.util.Comparator.comparingInt((Row r) -> r.h().hits()).reversed()
+                .thenComparing(r -> r.h().name(), String.CASE_INSENSITIVE_ORDER));
+        int players = rows.size();
+        int scoring = (int) rows.stream().filter(r -> r.h().hits() > 0).count();
+        // Real hits, like the scoreboard's Total hits: penalties don't change how many hits were made.
+        int total = rows.stream().mapToInt(r -> r.h().hits() - CompetitionService.adjustment(f, r.h().name())).sum();
+
+        Ui ui = new Ui(colour).text(header).divider();
+        ui.text("### 🏰 Whole faction\n**" + String.format(java.util.Locale.ENGLISH, "%,d", total) + "** hits · "
+                + teams.size() + " teams · " + scoring + " of " + players + (players == 1 ? " player" : " players") + " scoring");
+
+        if (players == 0) {
+            ui.text("-# No drafted players yet.");
+        } else {
+            int rankWidth = String.valueOf(players).length();
+            int codeWidth = Math.max(4, rows.stream().mapToInt(r -> r.code().length()).max().orElse(2));
+            int hitDigits = Math.max(4, rows.stream().mapToInt(r -> String.valueOf(r.h().hits()).length()).max().orElse(1));
+            int fixed = rankWidth + 1 + 2 + codeWidth + 2 + hitDigits;
+            int nameWidth = Math.max(6, Math.min(CompetitionService.MAX_ROW - fixed,
+                    rows.stream().mapToInt(r -> r.h().name().length() + (r.h().left() ? 1 : 0)).max().orElse(6)));
+            int rowWidth = fixed + nameWidth;
+            StringBuilder table = new StringBuilder("```\n")
+                    .append(" ".repeat(rankWidth + 1)).append(CompetitionService.pad("Player", nameWidth)).append("  ")
+                    .append(CompetitionService.pad("Team", codeWidth)).append("  ")
+                    .append(String.format("%" + hitDigits + "s", "Hits")).append('\n')
+                    .append("─".repeat(rowWidth)).append('\n');
+            for (int n = 0; n < players; n++) {
+                Row r = rows.get(n);
+                table.append(String.format("%" + rankWidth + "d", n + 1)).append(' ')
+                        .append(CompetitionService.pad(r.h().name() + (r.h().left() ? "*" : ""), nameWidth)).append("  ")
+                        .append(CompetitionService.pad(r.code(), codeWidth)).append("  ")
+                        .append(String.format("%" + hitDigits + "d", r.h().hits())).append('\n');
+                if (table.length() > 3300) { // Discord allows 4000 characters of text per message
+                    table.append("+").append(players - n - 1).append(" more\n");
+                    break;
+                }
+            }
+            ui.text(table.append("```").toString());
+        }
+
+        StringBuilder notes = new StringBuilder("-# ");
+        for (int n = 0; n < teams.size(); n++) {
+            if (n > 0) notes.append(" · ");
+            notes.append(codes.get(teams.get(n).name())).append(" ").append(teams.get(n).name());
+        }
+        notes.append('\n');
+        for (Row r : rows) {
+            int adj = CompetitionService.adjustment(f, r.h().name());
+            if (adj != 0) {
+                notes.append("-# ").append(r.h().name()).append(": ").append(adj > 0 ? "+" : "−").append(Math.abs(adj))
+                        .append(adj < 0 ? " hit penalty" : " hit bonus").append(" applied\n");
+            }
+        }
+        if (rows.stream().anyMatch(r -> r.h().left())) {
+            notes.append("-# * left the faction — hits after leaving can't be seen\n");
+        }
+        notes.append("-# Successful outgoing hits by drafted players · family factions excluded");
+        ui.text(notes.toString());
+
+        ui.divider();
+        ui.menu(breakdownPicker(f, teams, 0));
+        ui.buttons(Button.secondary(id("sbteam", f, "1", "next"), "🥇 " + shortLabel(teams.get(0).name()) + " ▶"),
+                Button.primary(id("sbfam", f, "0"), "🌐 Whole family"),
+                Button.secondary(id("close", f), "✖ Close"));
+        return ui.build();
+    }
+
+    // ---------- 🌐 Whole family: every participating faction ----------
+
+    /** Players per page in the family view: ~31 characters a row keeps a page well inside Discord's limit. */
+    private static final int FAMILY_PAGE = 60;
+
+    private void showFamily(InteractionHook hook, Faction f, int page) {
+        try {
+            show(hook, familyBreakdownView(f, page));
+        } catch (Exception ex) {
+            log.warn("Family breakdown failed: {}", ex.getMessage(), ex);
+            show(hook, new Ui(RED).text("⚠️ Couldn't load the family view — try again in a minute.")
+                    .buttons(Button.secondary(id("close", f), "✖ Close")).build());
+        }
+    }
+
+    /** Short label for a faction in tables: its configured tag (CX, PX, CiX…), else its initials. */
+    private static String factionTag(Faction f) {
+        String tag = f.getTag();
+        if (tag != null && !tag.isBlank()) return tag.trim();
+        StringBuilder sb = new StringBuilder();
+        for (String w : f.getName().trim().split("\\s+")) if (!w.isEmpty()) sb.append(Character.toUpperCase(w.charAt(0)));
+        return sb.toString();
+    }
+
+    /**
+     * Every faction that has drafted: faction standings (real hits, players, scoring), then every
+     * drafted player across the whole family ranked by hits, {@link #FAMILY_PAGE} a page.
+     * {@code from} is the faction whose scoreboard the view was opened from (for the buttons back).
+     */
+    private View familyBreakdownView(Faction from, int page) {
+        record FactionRow(Faction f, int hits, int players, int scoring) {}
+        record Row(CompetitionService.Hitter h, String tag) {}
+        List<FactionRow> factions = new ArrayList<>();
+        List<Row> rows = new ArrayList<>();
+        for (Faction f : props.getFactions()) {
+            if (drafts.isBroken(f)) continue;
+            List<CompetitionService.TeamScore> teams = competitions.teamScores(f);
+            if (teams.isEmpty()) continue; // not drafted: not taking part
+            String tag = factionTag(f);
+            int hits = 0, players = 0, scoring = 0;
+            for (CompetitionService.TeamScore t : teams) {
+                for (CompetitionService.Hitter h : t.hitters()) {
+                    rows.add(new Row(h, tag));
+                    hits += h.hits() - CompetitionService.adjustment(f, h.name()); // real hits, like Total hits
+                    players++;
+                    if (h.hits() > 0) scoring++;
+                }
+            }
+            factions.add(new FactionRow(f, hits, players, scoring));
+        }
+        int colour = competitions.statusColour(from);
+        String header = "## 🌐 Whole family · Halloween Competition";
+        if (factions.isEmpty()) {
+            return new Ui(colour).text(header).text("No faction has drafted yet.")
+                    .buttons(Button.secondary(id("close", from), "✖ Close")).build();
+        }
+        factions.sort(java.util.Comparator.comparingInt(FactionRow::hits).reversed());
+        rows.sort(java.util.Comparator.comparingInt((Row r) -> r.h().hits()).reversed()
+                .thenComparing(r -> r.h().name(), String.CASE_INSENSITIVE_ORDER));
+        int total = factions.stream().mapToInt(FactionRow::hits).sum();
+        int scoring = factions.stream().mapToInt(FactionRow::scoring).sum();
+
+        Ui ui = new Ui(colour).text(header + "\n**" + String.format(java.util.Locale.ENGLISH, "%,d", total) + "** hits · "
+                + factions.size() + " factions · " + scoring + " of " + rows.size() + " players scoring").divider();
+
+        // Faction standings: rank · faction · players · hits.
+        int nameW = Math.max(7, factions.stream().mapToInt(x -> x.f().getName().length()).max().orElse(7));
+        int hitW = Math.max(4, String.valueOf(factions.get(0).hits()).length());
+        StringBuilder st = new StringBuilder("### 🏆 Faction standings\n```\n")
+                .append("  ").append(CompetitionService.pad("Faction", nameW)).append("  Players  ")
+                .append(String.format("%" + hitW + "s", "Hits")).append('\n')
+                .append("─".repeat(2 + nameW + 2 + 7 + 2 + hitW)).append('\n');
+        for (int n = 0; n < factions.size(); n++) {
+            FactionRow x = factions.get(n);
+            st.append(n + 1).append(' ').append(CompetitionService.pad(x.f().getName(), nameW)).append("  ")
+                    .append(String.format("%7d", x.players())).append("  ")
+                    .append(String.format("%" + hitW + "d", x.hits())).append('\n');
+        }
+        ui.text(st.append("```").toString());
+
+        // Every player in the family, a page at a time.
+        int pages = Math.max(1, (rows.size() + FAMILY_PAGE - 1) / FAMILY_PAGE);
+        int p = Math.max(0, Math.min(page, pages - 1));
+        int start = p * FAMILY_PAGE, end = Math.min(rows.size(), start + FAMILY_PAGE);
+        int rankWidth = String.valueOf(end).length();
+        int tagWidth = Math.max(3, rows.stream().mapToInt(r -> r.tag().length()).max().orElse(3));
+        int hitDigits = Math.max(4, rows.isEmpty() ? 1 : String.valueOf(rows.get(0).h().hits()).length());
+        int fixed = rankWidth + 1 + 2 + tagWidth + 2 + hitDigits;
+        int nameWidth = Math.max(6, Math.min(CompetitionService.MAX_ROW - fixed,
+                rows.subList(start, end).stream().mapToInt(r -> r.h().name().length() + (r.h().left() ? 1 : 0)).max().orElse(6)));
+        StringBuilder table = new StringBuilder("### ⚔️ Every player" + (pages > 1 ? " · page " + (p + 1) + " of " + pages : "")
+                + "\n```\n")
+                .append(" ".repeat(rankWidth + 1)).append(CompetitionService.pad("Player", nameWidth)).append("  ")
+                .append(CompetitionService.pad("Fac", tagWidth)).append("  ")
+                .append(String.format("%" + hitDigits + "s", "Hits")).append('\n')
+                .append("─".repeat(fixed + nameWidth)).append('\n');
+        for (int n = start; n < end; n++) {
+            Row r = rows.get(n);
+            table.append(String.format("%" + rankWidth + "d", n + 1)).append(' ')
+                    .append(CompetitionService.pad(r.h().name() + (r.h().left() ? "*" : ""), nameWidth)).append("  ")
+                    .append(CompetitionService.pad(r.tag(), tagWidth)).append("  ")
+                    .append(String.format("%" + hitDigits + "d", r.h().hits())).append('\n');
+        }
+        ui.text(table.append("```").toString());
+
+        StringBuilder key = new StringBuilder("-# ");
+        for (int n = 0; n < factions.size(); n++) {
+            if (n > 0) key.append(" · ");
+            key.append(factionTag(factions.get(n).f())).append(" ").append(factions.get(n).f().getName());
+        }
+        key.append("\n-# Each faction counts its own competition window · family factions excluded · "
+                + "hit penalties come off the player's hits, not the faction's total");
+        ui.text(key.toString());
+
+        ui.divider();
+        if (pages > 1) {
+            ui.buttons(p > 0 ? Button.secondary(id("sbfam", from, String.valueOf(p - 1)), "◀ Page " + p) : null,
+                    p < pages - 1 ? Button.secondary(id("sbfam", from, String.valueOf(p + 1)), "Page " + (p + 2) + " ▶") : null);
+        }
+        ui.buttons(Button.primary(id("sbteam", from, "0", "all"), "🏰 " + shortLabel(from.getName())),
+                Button.secondary(id("close", from), "✖ Close"));
         return ui.build();
     }
 
